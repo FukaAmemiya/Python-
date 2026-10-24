@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.novel_venv/
+.venv/
+venv/
+downloads/
+.novel_state/
+*.sqlite3
+*.sqlite3-*
+*.progress
+.novel-export-*.tmp

@@ -2,7 +2,9 @@
 
 用于下载话本小说和 SF 轻小说（菠萝包）的文本章节，支持 Tkinter GUI、命令行、SQLite 断点续传和 UTF-8 TXT 导出。需要 **Python 3.10+**；GUI 及窗口测试还需要 Tcl/Tk 和可用的桌面会话。
 
-**新版代码位于 `Python学习代码/`，仓库根目录的 `novel_downloader.py` 是旧版。以下操作均使用子目录中的新版。**
+**当前入口为仓库根目录的 `novel_downloader.py`，以下命令均在仓库根目录执行。旧脚本已归档至 [`legacy/`](legacy/README.md)。**
+
+源码版本见 [Releases](https://github.com/FukaAmemiya/Python-/releases)。下载源码压缩包后先解压，再按以下步骤安装依赖。
 
 ## 安装依赖
 
@@ -11,7 +13,6 @@
 ```sh
 git clone https://github.com/FukaAmemiya/Python-.git
 cd Python-
-cd "Python学习代码"
 ```
 
 Windows PowerShell：
@@ -40,7 +41,7 @@ python3 -m venv .novel_venv
 .\.novel_venv\Scripts\python.exe novel_downloader.py
 ```
 
-Windows 也可在安装依赖后双击 `Python学习代码/启动小说下载器.bat`。它优先使用同目录的 `.novel_venv`，不存在时使用系统 `python`，不会自动安装依赖。
+Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先使用同目录的 `.novel_venv`，不存在时使用系统 `python`，不会自动安装依赖。
 
 粘贴网址、选择保存目录，再点击“开始 / 继续”。窗口显示已保存章数和活动进度条；由于未获取全书总章数，不显示百分比。
 
@@ -73,7 +74,7 @@ Windows 也可在安装依赖后双击 `Python学习代码/启动小说下载器
 
 ## 保存位置与续传
 
-默认保存目录是 **`Python学习代码/downloads/`**，与启动命令所在的工作目录无关；也可在 GUI 或 CLI 中另行指定。
+默认保存目录是仓库根目录下的 **`downloads/`**，与启动命令所在的工作目录无关；也可在 GUI 或 CLI 中另行指定。
 
 | 文件（相对于保存目录） | 用途 |
 | --- | --- |
@@ -87,6 +88,8 @@ Windows 也可在安装依赖后双击 `Python学习代码/启动小说下载器
 - TXT 丢失或导出失败后，可用相同网址与目录重新运行，从数据库恢复并重新导出，无需重下已保存正文。强制退出时 TXT 可能尚未更新。
 - 请保留 `.novel_state`，不要同时运行同一任务。数据库损坏时程序会报错并保留文件，不会自动清空或从头覆盖。
 - 旧版 TXT 和 `.progress` 不会自动导入或覆盖；可用指定章节网址建立新任务。
+
+从旧目录布局升级时，请在 GUI 或 `--output` 中选择原来的 `Python学习代码/downloads/`，或在停止程序后将整个旧 `downloads/`（包括隐藏的 `.novel_state/`）移动到新的仓库根目录。虚拟环境需在新位置重新创建。
 
 ## 停止与恢复
 
@@ -104,7 +107,7 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 
 ## 离线测试
 
-在 `Python学习代码/` 中运行，测试使用模拟网页和请求，不访问小说网站：
+在仓库根目录运行，测试使用模拟网页和请求，不访问小说网站：
 
 ```powershell
 # 核心、存储与网络处理测试，不需要桌面
@@ -116,9 +119,9 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 
 ## 主要文件
 
-- `Python学习代码/novel_downloader.py`：GUI / CLI 入口。
-- `Python学习代码/novel_gui.py`：Tkinter 窗口与后台下载线程。
-- `Python学习代码/novel_core.py`：站点解析、链接校验、请求重试与下载流程。
-- `Python学习代码/novel_storage.py`：SQLite 状态保存与 TXT 原子导出。
+- `novel_downloader.py`：GUI / CLI 入口。
+- `novel_gui.py`：Tkinter 窗口与后台下载线程。
+- `novel_core.py`：站点解析、链接校验、请求重试与下载流程。
+- `novel_storage.py`：SQLite 状态保存与 TXT 原子导出。
 
 许可证见 [LICENSE](LICENSE)。
