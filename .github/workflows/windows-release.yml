@@ -1,0 +1,70 @@
+name: Windows standalone EXE release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'novel_*.py'
+      - 'requirements_novel.txt'
+      - 'test_novel_*.py'
+      - 'release-notes-v1.1.0.md'
+      - '.github/workflows/windows-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: v1.1.0
+      EXE_NAME: NovelDownloader-Windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application and packager
+        run: python -m pip install -r requirements_novel.txt "pyinstaller>=6.15,<7"
+      - name: Run core and bookshelf regression tests
+        run: python -m unittest -v test_novel_downloader test_novel_web test_novel_library
+      - name: Build standalone Windows GUI executable
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name NovelDownloader-Windows-x64 novel_downloader.py
+      - name: Smoke-test frozen executable
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\dist\$env:EXE_NAME" -ArgumentList @("--self-test", "bundle-smoke.txt") -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or !(Test-Path "bundle-smoke.txt")) {
+            throw "The packaged executable failed to start or import its components."
+          }
+          if ((Get-Content "bundle-smoke.txt" -Raw).Trim() -ne "bundle-ok") {
+            throw "The packaged executable returned an invalid smoke test result."
+          }
+      - name: Create SHA-256 manifest
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash ".\dist\$env:EXE_NAME" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:EXE_NAME" | Out-File ".\dist\SHA256SUMS.txt" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovelDownloader-Windows-x64
+          path: |
+            dist/NovelDownloader-Windows-x64.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = gh release list --limit 100 --json tagName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Could not query GitHub releases" }
+          if ($releases | Where-Object { $_.tagName -eq $env:RELEASE_TAG }) {
+            Write-Host "Release $env:RELEASE_TAG already exists; not replacing published binaries."
+            exit 0
+          }
+          gh release create "$env:RELEASE_TAG" ".\dist\$env:EXE_NAME" ".\dist\SHA256SUMS.txt" --target "$env:GITHUB_SHA" --title "v1.1.0 - Windows EXE 与下载书架" --notes-file "release-notes-v1.1.0.md" --latest
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed" }
