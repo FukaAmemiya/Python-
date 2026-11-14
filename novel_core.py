@@ -1,8 +1,10 @@
 """双站小说下载核心。Python 3.10+；界面入口见 novel_gui.py。"""
 
 import hashlib
+import os
 import re
 import sqlite3
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +21,15 @@ REQUEST_TIMEOUT = (10, 15)  # 连接超时、读取超时
 MAX_RETRIES = 3  # 总尝试次数
 RETRY_WAIT = 3
 REQUEST_DELAY = 0.8
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "downloads"
+# PyInstaller one-file extracts modules into a temporary directory; never save books there.
+# Keep the source-code workflow unchanged and use persistent user storage for Windows EXE.
+if getattr(sys, "frozen", False) and sys.platform == "win32":
+    DEFAULT_OUTPUT_DIR = (
+        Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+        / "NovelDownloader" / "downloads"
+    )
+else:
+    DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "downloads"
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
