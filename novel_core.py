@@ -426,7 +426,7 @@ class NovelDownloader:
 
             # 优先使用完整目录：比阅读页上的“下一章”导航更稳定。
             # 对具体章节页，如果目录不可用仍可沿导航继续。
-            catalog = adapter.catalog(url, required=adapter.is_catalog(url))
+            catalog = adapter.catalog(url, required=adapter.is_catalog(url) and not database.exists())
             chapters = catalog[1] if catalog else []
             chapter_positions = {item: index for index, item in enumerate(chapters)}
             # 章节网址作为起点时，进度只计算该章节及之后的内容。
@@ -524,7 +524,9 @@ class NovelDownloader:
                     self._wait(REQUEST_DELAY)
             status = "end_reached"
             if total_count is not None:
-                message = f"下载任务结束，已保存 {saved_count} 章，目录共 {total_count} 章。"
+                message = f"下载任务结束，已保存 {saved_count} 章，本任务目录范围共 {total_count} 章。"
+            elif database.exists() and not catalog and not current_url:
+                message = f"已导出本地 {saved_count} 章；目录不可访问，无法确认网站是否新增章节。"
             else:
                 message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
         except (DownloadStopped, KeyboardInterrupt):
