@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file
+        path="NovelDownloader-Windows-x64.exe"
+        product-name="双站小说下载器 (FukaAmemiya)"
+        product-version="${version}"
+        file-version="${version}"
+        company-name="FukaAmemiya"
+        original-filename="NovelDownloader-Windows-x64.exe">
+      <authenticode-sign hash-algorithm="sha256"
+          description="双站小说下载器 (FukaAmemiya)"
+          description-url="https://github.com/FukaAmemiya/Python-" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
