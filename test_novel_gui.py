@@ -81,6 +81,38 @@ class GuiTests(unittest.TestCase):
         self.pump_until(lambda: not self.app.busy)
         self.assertEqual(self.app.status.get(), "已停止")
 
+    def test_bookshelf_opens_and_resumes_existing_book(self):
+        import tempfile
+        from pathlib import Path
+        from novel_storage import DownloadStore
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder)
+            state = output / ".novel_state"
+            state.mkdir()
+            with_store = DownloadStore(state / "book.sqlite3")
+            try:
+                with_store.initialize(
+                    "https://book.sfacg.com/Novel/1/1/1", "测试书", "SF",
+                    "https://book.sfacg.com/Novel/1/1/1", "测试书.txt",
+                )
+                with_store.save_chapter(
+                    "https://book.sfacg.com/Novel/1/1/1", "第一章", "正文", None,
+                )
+            finally:
+                with_store.close()
+
+            self.app.directory.set(folder)
+            self.app.open_bookshelf()
+            shelf = self.app.bookshelf
+            self.assertEqual(len(shelf.books), 1)
+            self.assertEqual(shelf.books[0].chapters, 1)
+            shelf.tree.selection_set("0")
+            shelf.update_book()
+            self.pump_until(lambda: not self.app.busy)
+            self.assertEqual(self.app.url.get(), "https://book.sfacg.com/Novel/1/1/1")
+            shelf.window.destroy()
+
     def test_close_requests_stop_before_destroying(self):
         FakeDownloader.wait_for_stop = True
         self.app.start()
