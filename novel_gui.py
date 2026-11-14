@@ -134,6 +134,7 @@ class NovelApp:
             self.progress.start(12)
         else:
             self.progress.stop()
+            self.format_box.configure(state="readonly")
 
     def start(self):
         if self.busy or self.closing:
