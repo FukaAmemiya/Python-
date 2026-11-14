@@ -231,6 +231,107 @@ class DownloadTests(unittest.TestCase):
             self.assertIn("nav.xhtml", archive.read("EPUB/package.opf").decode())
 
 
+    def test_backfill_middle_chapter_preserves_txt_epub_order(self):
+        from zipfile import ZipFile
+        first = "https://www.ihuaben.com/book/1/100.html"
+        middle = "https://www.ihuaben.com/book/1/200.html"
+        last = "https://www.ihuaben.com/book/1/300.html"
+        entry = "https://www.ihuaben.com/book/1.html"
+        directory = "https://www.ihuaben.com/list/1.html"
+        db = self.directory / ".novel_state" / f"{core.task_key(entry)}.sqlite3"
+        db.parent.mkdir()
+        store = DownloadStore(db)
+        store.initialize(entry, "测试作品", "话本小说", first, "插章测试.txt")
+        store.save_chapter(first, "第一章", "前段正文", last)
+        store.save_chapter(last, "第三章", "后段正文", None)
+        store.close()
+        pages = {
+            directory: BeautifulSoup(
+                '<h1>测试作品</h1><a href="/book/1/100.html">一</a>'
+                '<a href="/book/1/200.html">二</a>'
+                '<a href="/book/1/300.html">三</a>', "html.parser"),
+            middle: BeautifulSoup(
+                '<h1>第二章</h1><div id="contentsource"><p>中段正文</p></div>',
+                "html.parser"),
+        }
+        dl = self.downloader(pages)
+        result = dl.run(entry, self.directory, output_format="both")
+        self.assertEqual((result.status, result.saved_count), ("end_reached", 3))
+        self.assertEqual(dl.fetched, [directory, middle])
+        text = result.output_path.read_text(encoding="utf-8")
+        self.assertLess(text.index("前段正文"), text.index("中段正文"))
+        self.assertLess(text.index("中段正文"), text.index("后段正文"))
+        with ZipFile(self.directory / "插章测试.epub") as book:
+            self.assertIn("前段正文", book.read("EPUB/chapter-00001.xhtml").decode())
+            self.assertIn("中段正文", book.read("EPUB/chapter-00002.xhtml").decode())
+            self.assertIn("后段正文", book.read("EPUB/chapter-00003.xhtml").decode())
+        repeated = self.downloader({directory: pages[directory]})
+        repeat_result = repeated.run(entry, self.directory)
+        self.assertEqual(repeat_result.saved_count, 3)
+        self.assertEqual(repeated.fetched, [directory])
+
+    def test_legacy_database_adds_catalog_without_losing_content(self):
+        legacy = self.directory / "legacy.sqlite3"
+        with sqlite3.connect(legacy) as connection:
+            connection.executescript("""
+                CREATE TABLE task (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    start_url TEXT NOT NULL, book_name TEXT NOT NULL,
+                    source TEXT NOT NULL, current_url TEXT,
+                    output_name TEXT NOT NULL, status TEXT NOT NULL
+                );
+                CREATE TABLE chapters (
+                    url TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE,
+                    title TEXT NOT NULL, content TEXT NOT NULL
+                );
+                INSERT INTO task VALUES (1, 'url', '旧书', '话本', NULL, 'old.txt', 'end_reached');
+                INSERT INTO chapters VALUES ('chapter1', 1, '第一章', '原文');
+            """)
+        store = DownloadStore(legacy)
+        self.addCleanup(store.close)
+        self.assertEqual(store.count(), 1)
+        store.set_catalog(["chapter1"])
+        self.assertEqual(store.iter_chapters().fetchone()["content"], "原文")
+
+    def test_chapter_page_progress_uses_requested_range(self):
+        entry = "https://www.ihuaben.com/book/1/300.html"
+        index = "https://www.ihuaben.com/list/1.html"
+        pages = {
+            index: BeautifulSoup(
+                '<a href="/book/1/100.html">一</a>'
+                '<a href="/book/1/200.html">二</a>'
+                '<a href="/book/1/300.html">三</a>', "html.parser"),
+            entry: BeautifulSoup(
+                '<title>作品</title><h1>第三章</h1>'
+                '<div id="contentsource"><p>第三章正文</p></div>', "html.parser"),
+        }
+        progress = []
+        downloader = self.downloader(pages, on_progress=progress.append)
+        result = downloader.run(entry, self.directory)
+        self.assertEqual((result.status, result.saved_count), ("end_reached", 1))
+        self.assertEqual(progress[-1].total_count, 1)
+        self.assertEqual(downloader.fetched, [index, entry])
+
+    def test_epub_rejects_invalid_xml_characters(self):
+        from xml.etree import ElementTree
+        from zipfile import ZipFile
+        from novel_epub import export_epub
+        store = DownloadStore(self.directory / "xml.sqlite3")
+        self.addCleanup(store.close)
+        store.initialize(U1, "带控制符\x01的书", "SF", U1, "xml.txt")
+        store.save_chapter(U1, "标题\x02", "可见内容\x03\n第二行", None)
+        target = export_epub(store, self.directory / "xml.epub")
+        with ZipFile(target) as archive:
+            for name in ("EPUB/package.opf", "EPUB/nav.xhtml", "EPUB/chapter-00001.xhtml"):
+                ElementTree.fromstring(archive.read(name))
+            self.assertIn(b"style.css", archive.read("EPUB/package.opf"))
+            self.assertIn(b"<br/>", archive.read("EPUB/chapter-00001.xhtml"))
+
+    def test_sf_catalog_accepts_trailing_slash(self):
+        adapter = core.SfacgAdapter(self.downloader({}))
+        self.assertTrue(adapter.is_catalog("https://book.sfacg.com/Novel/123/MainIndex/"))
+        self.assertTrue(adapter.is_catalog("https://book.sfacg.com/Novel/123/"))
+
     def test_catalog_download_and_repair_old_completed_task(self):
         first = "https://www.ihuaben.com/book/1/900.html"
         second = "https://www.ihuaben.com/book/1/100.html"
