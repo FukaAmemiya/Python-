@@ -173,26 +173,30 @@ class HuabenAdapter(SiteAdapter):
         book_id = self.book_id(url)
         if not book_id:
             return None
-        index_url = f"{HUABEN_BASE}/list/{book_id}.html"
-        try:
-            soup = self.dl._get_soup(index_url)
-        except (DownloadError, KeyError) as error:
-            if required:
-                raise DownloadError(f"话本目录请求失败：{error}") from error
-            self.dl.log("话本完整目录暂不可访问，将尝试下一章导航。")
-            return None
-        chapters = self._catalog_links(soup, index_url, book_id)
-        if not chapters:
-            if required:
-                raise DownloadError("话本完整目录没有可识别章节，请检查网页是否改版。")
-            self.dl.log("话本完整目录没有识别到章节，将尝试下一章导航。")
-            return None
-        heading = soup.find("h1")
-        name = self.clean_title(heading.get_text(" ", strip=True)) if heading else ""
-        if not name:
-            title = soup.find("title")
-            name = self.clean_title(title.get_text().split("章节目录")[0]) if title else "话本小说作品"
-        return name, chapters
+        urls = (
+            f"{HUABEN_BASE}/list/{book_id}.html",
+            f"{HUABEN_BASE}/book/{book_id}.html",
+        )
+        for index_url in urls:
+            try:
+                soup = self.dl._get_soup(index_url)
+            except (DownloadError, KeyError):
+                continue
+            chapters = self._catalog_links(soup, index_url, book_id)
+            if not chapters:
+                continue
+            heading = soup.find("h1")
+            name = self.clean_title(heading.get_text(" ", strip=True)) if heading else ""
+            if not name:
+                title = soup.find("title")
+                name = self.clean_title(title.get_text().split("章节目录")[0]) if title else "话本小说作品"
+            if index_url != urls[0]:
+                self.dl.log("完整目录不可用，改从书籍主页读取章节链接。")
+            return name, chapters
+        if required:
+            raise DownloadError("话本目录和书籍主页都没有可识别章节，请检查链接或网站结构。")
+        self.dl.log("话本目录暂不可用，将尝试下一章导航。")
+        return None
 
     def _catalog_links(self, soup, index_url, book_id):
         links, seen = [], set()
