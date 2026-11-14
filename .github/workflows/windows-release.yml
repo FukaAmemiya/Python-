@@ -115,9 +115,12 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "Release $env:RELEASE_TAG already exists; refusing to replace it."
           }
-          $existingTag = git tag --list "$env:RELEASE_TAG"
+          $existingTag = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to check remote release tags; refusing to publish.'
+          }
           if ($existingTag) {
-            throw "Git tag $env:RELEASE_TAG already exists; refusing to reuse it."
+            throw "Git tag $env:RELEASE_TAG already exists on origin; refusing to reuse it."
           }
 
       # Use GitHub OIDC federation; no private key, PFX, or Azure client secret
