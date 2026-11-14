@@ -41,6 +41,7 @@ class DownloadProgress:
     book_name: str
     chapter_title: str
     saved_count: int
+    total_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class DownloadResult:
     saved_count: int
     output_path: Path | None
     message: str
+    exports: tuple[Path, ...] = ()
 
 
 def normalize_url(url):
@@ -103,6 +105,10 @@ class SiteAdapter:
     def is_catalog(self, url):
         raise NotImplementedError
 
+    def catalog(self, url, required=False):
+        """返回 (书名, 按网页顺序排列的章节链接)，不可用时返回 None。"""
+        return None
+
     def validate_related(self, current_url, target):
         if urlsplit(current_url).hostname != urlsplit(target).hostname:
             raise DownloadError("章节链接跳转到了其他网站，已停止。")
@@ -113,7 +119,9 @@ class SiteAdapter:
     def find_next(self, soup, current_url):
         page_url = getattr(soup, "_source_url", None) or current_url
         for anchor in soup.find_all("a"):
-            if re.sub(r"\s+", "", anchor.get_text()) not in self.NEXT_TEXTS:
+            label = re.sub(r"\s+", "", anchor.get_text(" ", strip=True))
+            hint = re.sub(r"\s+", "", anchor.get("title", "") or anchor.get("aria-label", ""))
+            if not any(label.startswith(t) or hint.startswith(t) for t in self.NEXT_TEXTS):
                 continue
             href = (anchor.get("href") or "").strip()
             # 某些站点末章保留禁用的按钮。
@@ -152,34 +160,70 @@ class HuabenAdapter(SiteAdapter):
     NEXT_TEXTS = ("下一章", "下一篇")
 
     def book_id(self, url):
-        match = re.search(r"/book/(\d+)(?:/|\.html|$)", urlsplit(url).path)
+        path = urlsplit(url).path
+        match = re.search(r"^/(?:book|list)/(\d+)(?:/|\.html|$)", path)
         return match.group(1) if match else None
 
     def is_catalog(self, url):
-        return re.fullmatch(r"/book/\d+(?:\.html)?", urlsplit(url).path) is not None
+        path = urlsplit(url).path
+        return (re.fullmatch(r"/book/\d+(?:\.html)?", path) is not None
+                or re.fullmatch(r"/list/\d+\.html", path) is not None)
+
+    def catalog(self, url, required=False):
+        book_id = self.book_id(url)
+        if not book_id:
+            return None
+        urls = (
+            f"{HUABEN_BASE}/list/{book_id}.html",
+            f"{HUABEN_BASE}/book/{book_id}.html",
+        )
+        for index_url in urls:
+            try:
+                soup = self.dl._get_soup(index_url)
+            except (DownloadError, KeyError):
+                continue
+            chapters = self._catalog_links(soup, index_url, book_id)
+            if not chapters:
+                continue
+            heading = soup.find("h1")
+            name = self.clean_title(heading.get_text(" ", strip=True)) if heading else ""
+            if not name:
+                title = soup.find("title")
+                name = self.clean_title(title.get_text().split("章节目录")[0]) if title else "话本小说作品"
+            if index_url != urls[0]:
+                self.dl.log("完整目录不可用，改从书籍主页读取章节链接。")
+            return name, chapters
+        if required:
+            raise DownloadError("话本目录和书籍主页都没有可识别章节，请检查链接或网站结构。")
+        self.dl.log("话本目录暂不可用，将尝试下一章导航。")
+        return None
+
+    def _catalog_links(self, soup, index_url, book_id):
+        links, seen = [], set()
+        for anchor in soup.select("a[href]"):
+            try:
+                target = normalize_url(urljoin(index_url, anchor["href"]))
+            except (DownloadError, ValueError):
+                continue
+            if (self.book_id(target) != book_id
+                    or not self.CHAPTER_RE.search(urlsplit(target).path)
+                    or target in seen):
+                continue
+            seen.add(target)
+            links.append(target)
+        return links
 
     def prepare(self, url):
         soup = self.dl._get_soup(url)
         if soup.find("div", id="contentsource"):
             title = soup.find("title")
-            name = self.clean_title(title.get_text().split("-")[0]) if title else "话本小说作品"
+            raw = title.get_text(" ", strip=True) if title else ""
+            match = re.search(r"-《(.+?)》第\d+章", raw)
+            name = match.group(1) if match else self.clean_title(raw.split("-")[0])
             self.dl._cache[url] = soup
             self.dl.log("检测到章节页，从当前章节开始。")
-            return name, url
-        name_element = soup.find("h1", class_="text-danger")
-        if name_element is None:
-            raise DownloadError("未识别到话本书籍页或正文，请检查网址和访问状态。")
-        for span in soup.select("span.chapterTitle"):
-            link = span.find("a", href=True)
-            if link:
-                chapter_url = normalize_url(urljoin(
-                    getattr(soup, "_source_url", None) or url, link["href"]
-                ))
-                self.validate_related(url, chapter_url)
-                if self.CHAPTER_RE.search(urlsplit(chapter_url).path):
-                    self.dl.log("从页面目录中的第一项开始下载。")
-                    return self.clean_title(name_element.get_text()), chapter_url
-        raise DownloadError("没有找到章节列表，请尝试粘贴第一章阅读页网址。")
+            return name or "话本小说作品", url
+        raise DownloadError("未识别到话本正文，请使用书籍主页、目录或章节页网址。")
 
     @staticmethod
     def _parse_paragraph(paragraph):
@@ -213,9 +257,40 @@ class SfacgAdapter(SiteAdapter):
     def is_catalog(self, url):
         return re.fullmatch(r"/Novel/\d+(?:/MainIndex)?", urlsplit(url).path, re.I) is not None
 
+    def catalog(self, url, required=False):
+        book_id = self.book_id(url)
+        if not book_id:
+            return None
+        index_url = f"{SFACG_BASE}/Novel/{book_id}/MainIndex/"
+        try:
+            soup = self.dl._get_soup(index_url)
+        except (DownloadError, KeyError) as error:
+            if required:
+                raise DownloadError(f"SF 目录不可访问：{error}") from error
+            self.dl.log("SF 目录不可用，退回阅读页下一章导航。")
+            return None
+        links, seen = [], set()
+        for anchor in soup.select("a[href]"):
+            try:
+                target = normalize_url(urljoin(index_url, anchor["href"]))
+            except (DownloadError, ValueError):
+                continue
+            if (self.book_id(target) == book_id
+                    and self.CHAPTER_RE.search(urlsplit(target).path)
+                    and target not in seen):
+                seen.add(target)
+                links.append(target)
+        if not links:
+            if required:
+                raise DownloadError("SF 目录没有识别到章节，请粘贴具体阅读页。")
+            return None
+        title = soup.find("title")
+        name = title.get_text(" ", strip=True).split("-")[0] if title else "SF轻小说作品"
+        return name, links
+
     def prepare(self, url):
         if not self.CHAPTER_RE.search(urlsplit(url).path):
-            raise DownloadError("SF 轻小说请粘贴具体章节的阅读页网址。")
+            raise DownloadError("SF 轻小说请粘贴章节页，或提供书籍主页/目录页。")
         soup = self.dl._get_soup(url)
         self.parse_chapter(soup, url)
         self.dl._cache[url] = soup
@@ -326,12 +401,16 @@ class NovelDownloader:
     def _format_title(raw, count):
         return raw if re.search(r"第.{1,20}章", raw) else f"第{count}章 {raw}"
 
-    def run(self, url, output_dir=DEFAULT_OUTPUT_DIR):
+    def run(self, url, output_dir=DEFAULT_OUTPUT_DIR, output_format="txt"):
+        if output_format not in ("txt", "epub", "both"):
+            raise ValueError("输出格式必须是 txt、epub 或 both。")
         store = None
         ready = False
         output_path = None
+        exports = []
         book_name = ""
         saved_count = 0
+        total_count = None
         status, message = "failed", "下载未开始。"
         self._cache.clear()
         try:
@@ -344,6 +423,15 @@ class NovelDownloader:
             state_dir.mkdir(exist_ok=True)
             key = task_key(url)
             database = state_dir / f"{key}.sqlite3"
+
+            # 优先使用完整目录：比阅读页上的“下一章”导航更稳定。
+            # 对具体章节页，如果目录不可用仍可沿导航继续。
+            catalog = adapter.catalog(url, required=adapter.is_catalog(url))
+            chapters = catalog[1] if catalog else []
+            total_count = len(chapters) or None
+            if total_count:
+                self.log(f"已识别完整目录：共 {total_count} 章。")
+
             if database.exists():
                 store = DownloadStore(database)
                 task = store.task()
@@ -354,10 +442,26 @@ class NovelDownloader:
                 saved_count = store.count()
                 ready = True
                 self.log(f"恢复任务：{book_name}，已保存 {saved_count} 章。")
+                if not current_url and chapters and saved_count:
+                    last = store.last_chapter_url()
+                    if last in chapters:
+                        remaining = chapters[chapters.index(last) + 1:]
+                        next_missing = next(
+                            (item for item in remaining if not store.contains(item)), None
+                        )
+                        if next_missing:
+                            store.resume_at(next_missing)
+                            current_url = next_missing
+                            self.log("目录仍有未下载章节，已修复旧版本的误判完结状态。")
             else:
-                self.log(f"正在识别 {adapter.source_name} 页面……")
-                book_name, first_url = adapter.prepare(url)
-                # prepare 请求过的章节页由缓存供主循环复用。
+                if adapter.is_catalog(url):
+                    if not chapters:
+                        raise DownloadError("书籍目录没有找到可下载章节。")
+                    book_name, first_url = catalog[0], chapters[0]
+                elif catalog and url in chapters:
+                    book_name, first_url = catalog[0], url
+                else:
+                    book_name, first_url = adapter.prepare(url)
                 stem = safe_filename(adapter.name_prefix + book_name) + "_" + key[:10]
                 output_name = stem + ".txt"
                 index = 2
@@ -368,7 +472,8 @@ class NovelDownloader:
                 store.initialize(url, book_name, adapter.source_name, first_url, output_name)
                 current_url = first_url
                 ready = True
-            self.on_progress(DownloadProgress(book_name, "准备下载", saved_count))
+
+            self.on_progress(DownloadProgress(book_name, "准备下载", saved_count, total_count))
             while current_url:
                 self._check_stop()
                 normalized = normalize_url(current_url)
@@ -382,7 +487,15 @@ class NovelDownloader:
                 content = self._clean_content(content)
                 if not content:
                     raise DownloadError("章节正文为空，本章未保存。")
-                next_url = adapter.find_next(soup, current_url)
+
+                if current_url in chapters:
+                    position = chapters.index(current_url)
+                    next_url = next(
+                        (candidate for candidate in chapters[position + 1:]
+                         if not store.contains(candidate)), None
+                    )
+                else:
+                    next_url = adapter.find_next(soup, current_url)
                 if next_url == current_url or (next_url and store.contains(next_url)):
                     raise DownloadError("下一章链接回到已下载章节，已停止并保留记录。")
                 title = self._format_title(raw_title, saved_count + 1)
@@ -390,12 +503,15 @@ class NovelDownloader:
                 store.save_chapter(current_url, title, content, next_url)
                 saved_count = store.count()
                 self.log(f"已保存：{title}")
-                self.on_progress(DownloadProgress(book_name, title, saved_count))
+                self.on_progress(DownloadProgress(book_name, title, saved_count, total_count))
                 current_url = next_url
                 if current_url:
                     self._wait(REQUEST_DELAY)
             status = "end_reached"
-            message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
+            if total_count is not None:
+                message = f"下载任务结束，已保存 {saved_count} 章，目录共 {total_count} 章。"
+            else:
+                message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
         except (DownloadStopped, KeyboardInterrupt):
             status, message = "stopped", "已停止；使用相同网址和保存目录可继续。"
         except (DownloadError, StorageError, requests.RequestException, OSError, sqlite3.Error, ValueError) as error:
@@ -405,15 +521,25 @@ class NovelDownloader:
                 if store is not None and ready:
                     saved_count = store.count()
                     if saved_count:
-                        output_path = store.export(output_dir)
-            except (OSError, sqlite3.Error, StorageError) as error:
+                        if output_format in ("txt", "both"):
+                            output_path = store.export(output_dir)
+                            exports.append(output_path)
+                        if output_format in ("epub", "both"):
+                            from novel_epub import export_epub
+                            target_name = Path(store.task()["output_name"]).with_suffix(".epub")
+                            epub_path = export_epub(store, output_dir / target_name)
+                            exports.append(epub_path)
+                            if output_path is None:
+                                output_path = epub_path
+            except (OSError, sqlite3.Error, StorageError, ValueError) as error:
                 status = "failed"
-                message += f" TXT 导出失败：{error}。章节仍在下载记录中，重试可重新导出。"
+                message += f" 导出失败：{error}。章节仍在下载记录中，重试可重新导出。"
             finally:
                 if store is not None:
                     store.close()
                 self._cache.clear()
         self.log(message)
-        if output_path:
-            self.log(f"TXT 已保存到：{output_path}")
-        return DownloadResult(status, book_name, saved_count, output_path, message)
+        for path in exports:
+            self.log(f"已导出：{path}")
+        return DownloadResult(status, book_name, saved_count, output_path, message, tuple(exports))
+

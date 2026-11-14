@@ -22,7 +22,7 @@ class FakeDownloader:
     def __exit__(self, *_):
         pass
 
-    def run(self, url, directory):
+    def run(self, url, directory, output_format="txt"):
         self.entered.set()
         self.log("离线测试日志")
         self.progress(DownloadProgress("测试作品", "第一章", 1))

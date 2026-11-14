@@ -50,6 +50,7 @@ class NovelApp:
 
         self.url = tk.StringVar()
         self.directory = tk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
+        self.output_format = tk.StringVar(value="both")
         form = ttk.Frame(page)
         form.grid(row=2, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)
@@ -61,8 +62,16 @@ class NovelApp:
         self.directory_entry.grid(row=1, column=1, sticky="ew")
         self.browse_button = ttk.Button(form, text="选择目录", command=self.choose_directory)
         self.browse_button.grid(row=1, column=2, padx=(10, 0))
-        ttk.Label(page, text="话本：书籍主页或章节页    ·    SF：具体章节阅读页",
-                  style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(10, 16))
+        settings = ttk.Frame(page)
+        settings.grid(row=3, column=0, sticky="w", pady=(10, 16))
+        ttk.Label(settings, text="输出格式").pack(side="left", padx=(0, 10))
+        self.format_box = ttk.Combobox(
+            settings, textvariable=self.output_format, values=("both", "txt", "epub"),
+            state="readonly", width=9,
+        )
+        self.format_box.pack(side="left")
+        ttk.Label(settings, text="both = TXT + EPUB  ·  支持话本 / SF 书籍主页或阅读页",
+                  style="Muted.TLabel").pack(side="left", padx=(14, 0))
 
         buttons = ttk.Frame(page)
         buttons.grid(row=4, column=0, sticky="ew")
@@ -71,7 +80,7 @@ class NovelApp:
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(buttons, text="停止并保存", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=10)
-        self.open_text_button = ttk.Button(buttons, text="打开 TXT", command=self.open_text, state="disabled")
+        self.open_text_button = ttk.Button(buttons, text="打开文件", command=self.open_text, state="disabled")
         self.open_text_button.pack(side="right")
         ttk.Button(buttons, text="打开目录", command=self.open_directory).pack(side="right", padx=10)
 
@@ -117,19 +126,22 @@ class NovelApp:
     def set_busy(self, busy):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for widget in (self.start_button, self.url_entry, self.directory_entry, self.browse_button):
+        for widget in (self.start_button, self.url_entry, self.directory_entry, self.browse_button, self.format_box):
             widget.configure(state=state)
         self.stop_button.configure(state="normal" if busy else "disabled")
         if busy:
+            self.progress.configure(mode="indeterminate")
             self.progress.start(12)
         else:
             self.progress.stop()
+            self.format_box.configure(state="readonly")
 
     def start(self):
         if self.busy or self.closing:
             return
         url = self.url.get().strip()
         directory = self.directory.get().strip()
+        output_format = self.output_format.get()
         try:
             normalize_url(url)
             if not directory:
@@ -146,18 +158,18 @@ class NovelApp:
         self.append_log("\n—— 开始任务 ——")
         self.set_busy(True)
         self.worker = threading.Thread(
-            target=self.download, args=(url, directory, self.stop_event), daemon=False
+            target=self.download, args=(url, directory, output_format, self.stop_event), daemon=False
         )
         self.worker.start()
 
-    def download(self, url, directory, stop_event):
+    def download(self, url, directory, output_format, stop_event):
         try:
             with NovelDownloader(
                 on_log=lambda message: self.events.put(("log", message)),
                 on_progress=lambda progress: self.events.put(("progress", progress)),
                 stop_event=stop_event,
             ) as downloader:
-                result = downloader.run(url, directory)
+                result = downloader.run(url, directory, output_format=output_format)
         except Exception as error:
             result = DownloadResult("failed", "", 0, None, f"程序运行失败：{error}")
         self.events.put(("done", result))
@@ -180,7 +192,13 @@ class NovelApp:
             elif kind == "progress":
                 if not self.stop_event.is_set():
                     self.status.set(value.book_name or "正在下载")
-                self.detail.set(f"已保存 {value.saved_count} 章 · {value.chapter_title}")
+                count = (f"{value.saved_count}/{value.total_count} 章"
+                         if value.total_count else f"{value.saved_count} 章")
+                self.detail.set(f"已保存 {count} · {value.chapter_title}")
+                if value.total_count:
+                    self.progress.stop()
+                    self.progress.configure(mode="determinate", maximum=value.total_count)
+                    self.progress["value"] = value.saved_count
             elif kind == "done":
                 self.set_busy(False)
                 self.output_path = value.output_path

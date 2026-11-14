@@ -54,6 +54,10 @@ class DownloadTests(unittest.TestCase):
         self.delay = patch.object(core, "REQUEST_DELAY", 0)
         self.delay.start()
         self.addCleanup(self.delay.stop)
+        # 旧的离线用例没有模拟网站目录，保持导航测试独立。
+        catalog_patch = patch.object(core.SfacgAdapter, "catalog", return_value=None)
+        catalog_patch.start()
+        self.addCleanup(catalog_patch.stop)
 
     def downloader(self, pages, **kwargs):
         downloader = OfflineDownloader(pages, **kwargs)
@@ -188,15 +192,96 @@ class DownloadTests(unittest.TestCase):
         self.assertNotEqual(old, result.output_path)
         self.assertEqual(old.read_text(encoding="utf-8"), "已有文件")
 
-    def test_huaben_directory_uses_document_order(self):
-        url = "https://www.ihuaben.com/book/1.html"
+
+    def test_huaben_catalog_preserves_page_order(self):
+        index = "https://www.ihuaben.com/list/1.html"
         soup = BeautifulSoup("""
-            <h1 class="text-danger">测试书</h1>
-            <span class="chapterTitle"><a href="/book/1/900.html">第一章</a></span>
-            <span class="chapterTitle"><a href="/book/1/100.html">第二章</a></span>
+            <h1>测试书</h1>
+            <a href="/book/1/900.html">第一章</a>
+            <a href="/book/1/100.html">第二章</a>
+            <a href="/book/2/99.html">另一部书</a>
         """, "html.parser")
-        adapter = core.HuabenAdapter(self.downloader({url: soup}))
-        self.assertEqual(adapter.prepare(url)[1], "https://www.ihuaben.com/book/1/900.html")
+        adapter = core.HuabenAdapter(self.downloader({index: soup}))
+        name, chapters = adapter.catalog("https://www.ihuaben.com/book/1.html")
+        self.assertEqual(name, "测试书")
+        self.assertEqual(chapters, [
+            "https://www.ihuaben.com/book/1/900.html",
+            "https://www.ihuaben.com/book/1/100.html",
+        ])
+
+    def test_huaben_next_with_chapter_title(self):
+        adapter = core.HuabenAdapter(self.downloader({}))
+        soup = BeautifulSoup("""
+            <a href="/book/1/100.html">下一章 《第二章继续》</a>
+        """, "html.parser")
+        result = adapter.find_next(soup, "https://www.ihuaben.com/book/1/900.html")
+        self.assertEqual(result, "https://www.ihuaben.com/book/1/100.html")
+
+    def test_epub_export_contains_chapters(self):
+        from zipfile import ZipFile
+        from novel_epub import export_epub
+        store = DownloadStore(self.directory / "epub.sqlite3")
+        self.addCleanup(store.close)
+        store.initialize(U1, "测试书", "SF", U1, "book.txt")
+        store.save_chapter(U1, "第一章", "段落一\n\n段落二", None)
+        output = export_epub(store, self.directory / "book.epub")
+        with ZipFile(output) as archive:
+            self.assertEqual(archive.read("mimetype"), b"application/epub+zip")
+            self.assertIn("第一章", archive.read("EPUB/chapter-00001.xhtml").decode())
+            self.assertIn("nav.xhtml", archive.read("EPUB/package.opf").decode())
+
+
+    def test_catalog_download_and_repair_old_completed_task(self):
+        first = "https://www.ihuaben.com/book/1/900.html"
+        second = "https://www.ihuaben.com/book/1/100.html"
+        directory = "https://www.ihuaben.com/list/1.html"
+        entry = "https://www.ihuaben.com/book/1.html"
+        pages = {
+            directory: BeautifulSoup(
+                '<h1>测试作品</h1><a href="/book/1/900.html">第一章</a>'
+                '<a href="/book/1/100.html">第二章</a>', "html.parser"),
+            first: BeautifulSoup(
+                '<h1>第一章</h1><div id="contentsource"><p>第一段正文</p></div>',
+                "html.parser"),
+            second: BeautifulSoup(
+                '<h1>第二章</h1><div id="contentsource"><p>第二段正文</p></div>',
+                "html.parser"),
+        }
+        db = self.directory / ".novel_state" / f"{core.task_key(entry)}.sqlite3"
+        db.parent.mkdir()
+        store = DownloadStore(db)
+        store.initialize(entry, "测试作品", "话本小说", first, "测试作品.txt")
+        store.save_chapter(first, "第一章", "第一段正文", None)
+        store.close()
+        dl = self.downloader(pages)
+        result = dl.run(entry, self.directory, output_format="both")
+        self.assertEqual(result.status, "end_reached")
+        self.assertEqual(result.saved_count, 2)
+        self.assertEqual(len(result.exports), 2)
+        self.assertEqual(dl.fetched, [directory, second])
+        self.assertEqual(result.output_path.read_text(encoding="utf-8").count("第一段正文"), 1)
+        self.assertTrue((self.directory / "测试作品.epub").is_file())
+
+    def test_catalog_home_page_starts_at_first_chapter(self):
+        entry = "https://www.ihuaben.com/book/1.html"
+        directory = "https://www.ihuaben.com/list/1.html"
+        first = "https://www.ihuaben.com/book/1/900.html"
+        second = "https://www.ihuaben.com/book/1/100.html"
+        pages = {
+            directory: BeautifulSoup(
+                '<h1>测试作品</h1><a href="/book/1/900.html">第一章</a>'
+                '<a href="/book/1/100.html">第二章</a>', "html.parser"),
+            first: BeautifulSoup(
+                '<h1>第一章</h1><div id="contentsource"><p>正文1</p></div>',
+                "html.parser"),
+            second: BeautifulSoup(
+                '<h1>第二章</h1><div id="contentsource"><p>正文2</p></div>',
+                "html.parser"),
+        }
+        dl = self.downloader(pages)
+        result = dl.run(entry, self.directory)
+        self.assertEqual((result.status, result.saved_count), ("end_reached", 2))
+        self.assertEqual(dl.fetched, [directory, first, second])
 
     def test_relative_navigation_uses_current_page(self):
         soup = page(next_url="../2/")
