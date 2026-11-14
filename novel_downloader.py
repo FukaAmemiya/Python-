@@ -7,6 +7,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description="话本小说 / SF轻小说下载器")
     parser.add_argument("--cli", action="store_true", help="使用交互命令行")
+    parser.add_argument("--self-test", metavar="FILE", help=argparse.SUPPRESS)
     parser.add_argument("--server", action="store_true", help="启动仅在本机访问的 Web UI")
     parser.add_argument("--port", type=int, default=18423, help="Web UI 本地端口")
     parser.add_argument("--url", help="直接下载指定网址")
@@ -20,6 +21,17 @@ def main():
             raise
         print("缺少依赖。请先执行：python -m pip install -r requirements_novel.txt")
         return 1
+
+    if args.self_test:
+        # Used only by Windows CI to verify the frozen GUI executable's imports.
+        from pathlib import Path
+        from novel_epub import export_epub
+        from novel_library import scan_books
+        from novel_gui import NovelApp
+        from novel_web import DownloadDashboard
+        assert export_epub and scan_books and NovelApp and DownloadDashboard
+        Path(args.self_test).write_text("bundle-ok", encoding="utf-8")
+        return 0
 
     if args.server:
         from novel_web import serve
