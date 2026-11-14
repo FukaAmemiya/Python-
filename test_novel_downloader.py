@@ -231,6 +231,58 @@ class DownloadTests(unittest.TestCase):
             self.assertIn("nav.xhtml", archive.read("EPUB/package.opf").decode())
 
 
+    def test_catalog_download_and_repair_old_completed_task(self):
+        first = "https://www.ihuaben.com/book/1/900.html"
+        second = "https://www.ihuaben.com/book/1/100.html"
+        directory = "https://www.ihuaben.com/list/1.html"
+        entry = "https://www.ihuaben.com/book/1.html"
+        pages = {
+            directory: BeautifulSoup(
+                '<h1>测试作品</h1><a href="/book/1/900.html">第一章</a>'
+                '<a href="/book/1/100.html">第二章</a>', "html.parser"),
+            first: BeautifulSoup(
+                '<h1>第一章</h1><div id="contentsource"><p>第一段正文</p></div>',
+                "html.parser"),
+            second: BeautifulSoup(
+                '<h1>第二章</h1><div id="contentsource"><p>第二段正文</p></div>',
+                "html.parser"),
+        }
+        db = self.directory / ".novel_state" / f"{core.task_key(entry)}.sqlite3"
+        db.parent.mkdir()
+        store = DownloadStore(db)
+        store.initialize(entry, "测试作品", "话本小说", first, "测试作品.txt")
+        store.save_chapter(first, "第一章", "第一段正文", None)
+        store.close()
+        dl = self.downloader(pages)
+        result = dl.run(entry, self.directory, output_format="both")
+        self.assertEqual(result.status, "end_reached")
+        self.assertEqual(result.saved_count, 2)
+        self.assertEqual(len(result.exports), 2)
+        self.assertEqual(dl.fetched, [directory, second])
+        self.assertEqual(result.output_path.read_text(encoding="utf-8").count("第一段正文"), 1)
+        self.assertTrue((self.directory / "测试作品.epub").is_file())
+
+    def test_catalog_home_page_starts_at_first_chapter(self):
+        entry = "https://www.ihuaben.com/book/1.html"
+        directory = "https://www.ihuaben.com/list/1.html"
+        first = "https://www.ihuaben.com/book/1/900.html"
+        second = "https://www.ihuaben.com/book/1/100.html"
+        pages = {
+            directory: BeautifulSoup(
+                '<h1>测试作品</h1><a href="/book/1/900.html">第一章</a>'
+                '<a href="/book/1/100.html">第二章</a>', "html.parser"),
+            first: BeautifulSoup(
+                '<h1>第一章</h1><div id="contentsource"><p>正文1</p></div>',
+                "html.parser"),
+            second: BeautifulSoup(
+                '<h1>第二章</h1><div id="contentsource"><p>正文2</p></div>',
+                "html.parser"),
+        }
+        dl = self.downloader(pages)
+        result = dl.run(entry, self.directory)
+        self.assertEqual((result.status, result.saved_count), ("end_reached", 2))
+        self.assertEqual(dl.fetched, [directory, first, second])
+
     def test_relative_navigation_uses_current_page(self):
         soup = page(next_url="../2/")
         soup._source_url = U1 + "/"
