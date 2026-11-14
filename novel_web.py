@@ -172,7 +172,7 @@ def serve(port=18423, output_dir=DEFAULT_OUTPUT_DIR):
             return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="5">
+<script>setInterval(() => { if (document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "SELECT") location.reload(); }, 5000);</script>
 <title>小说下载器</title>
 <style>
 body{{font:16px system-ui,sans-serif;max-width:850px;margin:3em auto;
@@ -184,7 +184,7 @@ button,select{{padding:.6em 1em;margin:.4em;font-size:1em}}
 pre{{overflow:auto;white-space:pre-wrap;max-height:20em;background:#f1f5f9;padding:1em}}
 a{{color:#2563eb}}
 </style></head><body><h1>小说下载器</h1>
-<p>话本小说 / SF 轻小说 · 本机 Web UI（5 秒自动刷新）</p>
+<p>话本小说 / SF 轻小说 · 本机 Web UI（闲置时每 5 秒刷新）</p>
 <section><h2>开始下载</h2>
 <form method="post" action="/start">
 <input type="hidden" name="token" value="{dashboard.token}">
