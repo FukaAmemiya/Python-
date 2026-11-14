@@ -2,7 +2,7 @@ name: Novel downloader tests
 
 on:
   push:
-    branches: [main, feature/catalog-epub-resume]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -17,3 +17,14 @@ jobs:
       - run: python -m compileall -q novel_core.py novel_downloader.py novel_gui.py novel_storage.py novel_epub.py novel_web.py
       - run: python -m unittest -v test_novel_downloader test_novel_web
       - run: xvfb-run -a python -m unittest -v test_novel_gui
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements_novel.txt
+      - run: python -m compileall -q novel_core.py novel_downloader.py novel_gui.py novel_storage.py novel_epub.py novel_web.py
+      - run: python -m unittest -v test_novel_downloader test_novel_web

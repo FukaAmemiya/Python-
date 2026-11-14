@@ -255,7 +255,7 @@ class SfacgAdapter(SiteAdapter):
         return match.group(1) if match else None
 
     def is_catalog(self, url):
-        return re.fullmatch(r"/Novel/\d+(?:/MainIndex)?", urlsplit(url).path, re.I) is not None
+        return re.fullmatch(r"/Novel/\d+(?:/MainIndex)?/?", urlsplit(url).path, re.I) is not None
 
     def catalog(self, url, required=False):
         book_id = self.book_id(url)
@@ -423,16 +423,21 @@ class NovelDownloader:
             state_dir.mkdir(exist_ok=True)
             key = task_key(url)
             database = state_dir / f"{key}.sqlite3"
+            existing_task = database.exists()
 
             # 优先使用完整目录：比阅读页上的“下一章”导航更稳定。
             # 对具体章节页，如果目录不可用仍可沿导航继续。
-            catalog = adapter.catalog(url, required=adapter.is_catalog(url))
+            catalog = adapter.catalog(url, required=adapter.is_catalog(url) and not existing_task)
             chapters = catalog[1] if catalog else []
-            total_count = len(chapters) or None
-            if total_count:
-                self.log(f"已识别完整目录：共 {total_count} 章。")
+            chapter_positions = {item: index for index, item in enumerate(chapters)}
+            # 章节网址作为起点时，进度只计算该章节及之后的内容。
+            chapter_start = chapter_positions.get(url, 0)
+            eligible_chapters = chapters[chapter_start:]
+            total_count = len(eligible_chapters) if chapters else None
+            if chapters:
+                self.log(f"已识别完整目录：共 {len(chapters)} 章；本任务范围 {total_count} 章。")
 
-            if database.exists():
+            if existing_task:
                 store = DownloadStore(database)
                 task = store.task()
                 if task["start_url"] != url:
@@ -442,17 +447,7 @@ class NovelDownloader:
                 saved_count = store.count()
                 ready = True
                 self.log(f"恢复任务：{book_name}，已保存 {saved_count} 章。")
-                if not current_url and chapters and saved_count:
-                    last = store.last_chapter_url()
-                    if last in chapters:
-                        remaining = chapters[chapters.index(last) + 1:]
-                        next_missing = next(
-                            (item for item in remaining if not store.contains(item)), None
-                        )
-                        if next_missing:
-                            store.resume_at(next_missing)
-                            current_url = next_missing
-                            self.log("目录仍有未下载章节，已修复旧版本的误判完结状态。")
+
             else:
                 if adapter.is_catalog(url):
                     if not chapters:
@@ -473,6 +468,25 @@ class NovelDownloader:
                 current_url = first_url
                 ready = True
 
+            saved_urls = store.saved_urls()
+            if chapters:
+                # 目录排序数据只新增辅助表，不重写旧章节和正文。
+                store.set_catalog(chapters)
+                outside_catalog = saved_urls.difference(chapter_positions)
+                if outside_catalog:
+                    self.log(
+                        f"警告：已有 {len(outside_catalog)} 章不在当前目录中；"
+                        "保留其正文，并在导出时排到已知目录章节之后。"
+                    )
+                first_missing = next(
+                    (item for item in eligible_chapters if item not in saved_urls), None
+                )
+                if first_missing and (current_url is None or current_url in chapter_positions):
+                    if first_missing != current_url:
+                        store.resume_at(first_missing)
+                        current_url = first_missing
+                        self.log("发现未下载章节（包括可能插入在中间的章节），正在自动补齐。")
+
             self.on_progress(DownloadProgress(book_name, "准备下载", saved_count, total_count))
             while current_url:
                 self._check_stop()
@@ -488,19 +502,21 @@ class NovelDownloader:
                 if not content:
                     raise DownloadError("章节正文为空，本章未保存。")
 
-                if current_url in chapters:
-                    position = chapters.index(current_url)
+                position = chapter_positions.get(current_url)
+                if position is not None:
                     next_url = next(
                         (candidate for candidate in chapters[position + 1:]
-                         if not store.contains(candidate)), None
+                         if candidate not in saved_urls), None
                     )
                 else:
                     next_url = adapter.find_next(soup, current_url)
                 if next_url == current_url or (next_url and store.contains(next_url)):
                     raise DownloadError("下一章链接回到已下载章节，已停止并保留记录。")
-                title = self._format_title(raw_title, saved_count + 1)
+                title_number = position + 1 if position is not None else saved_count + 1
+                title = self._format_title(raw_title, title_number)
                 self._check_stop()
                 store.save_chapter(current_url, title, content, next_url)
+                saved_urls.add(current_url)
                 saved_count = store.count()
                 self.log(f"已保存：{title}")
                 self.on_progress(DownloadProgress(book_name, title, saved_count, total_count))
@@ -509,7 +525,9 @@ class NovelDownloader:
                     self._wait(REQUEST_DELAY)
             status = "end_reached"
             if total_count is not None:
-                message = f"下载任务结束，已保存 {saved_count} 章，目录共 {total_count} 章。"
+                message = f"下载任务结束，已保存 {saved_count} 章，本任务目录范围共 {total_count} 章。"
+            elif existing_task and not catalog and not current_url:
+                message = f"已导出本地 {saved_count} 章；目录不可访问，无法确认网站是否新增章节。"
             else:
                 message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
         except (DownloadStopped, KeyboardInterrupt):
