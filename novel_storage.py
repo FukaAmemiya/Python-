@@ -55,6 +55,22 @@ class DownloadStore:
             "SELECT 1 FROM chapters WHERE url = ?", (url,)
         ).fetchone() is not None
 
+    def last_chapter_url(self):
+        row = self.connection.execute(
+            "SELECT url FROM chapters ORDER BY position DESC LIMIT 1"
+        ).fetchone()
+        return row["url"] if row else None
+
+    def resume_at(self, url):
+        """恢复误判结束的任务；已有章节正文保持不变。"""
+        if self.contains(url):
+            raise StorageError("续传目标已保存，无法重复插入。")
+        with self.connection:
+            self.connection.execute(
+                "UPDATE task SET current_url = ?, status = 'running' WHERE id = 1",
+                (url,),
+            )
+
     def save_chapter(self, url, title, content, next_url):
         # 事务失败会同时撤销正文和进度。
         with self.connection:
