@@ -52,7 +52,7 @@ jobs:
       - name: Install application and packager
         run: python -m pip install -r requirements_novel.txt "pyinstaller>=6.15,<7"
       - name: Run core and bookshelf regression tests
-        run: python -m unittest -v test_novel_downloader test_novel_web test_novel_library
+        run: python -m unittest -v test_novel_downloader test_novel_web test_novel_library test_signpath_config
       - name: Create Windows version metadata
         id: version
         shell: pwsh
