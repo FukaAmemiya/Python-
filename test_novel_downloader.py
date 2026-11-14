@@ -35,9 +35,6 @@ class OfflineDownloader(core.NovelDownloader):
         self.pages = pages
         self.fetched = []
 
-    def catalog(self, url, required=False):
-        return None
-
     def _get_soup(self, url):
         self._check_stop()
         if url in self._cache:
@@ -57,6 +54,10 @@ class DownloadTests(unittest.TestCase):
         self.delay = patch.object(core, "REQUEST_DELAY", 0)
         self.delay.start()
         self.addCleanup(self.delay.stop)
+        # 旧的离线用例没有模拟网站目录，保持导航测试独立。
+        catalog_patch = patch.object(core.SfacgAdapter, "catalog", return_value=None)
+        catalog_patch.start()
+        self.addCleanup(catalog_patch.stop)
 
     def downloader(self, pages, **kwargs):
         downloader = OfflineDownloader(pages, **kwargs)
