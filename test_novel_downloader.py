@@ -272,7 +272,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_legacy_database_adds_catalog_without_losing_content(self):
         legacy = self.directory / "legacy.sqlite3"
-        with sqlite3.connect(legacy) as connection:
+        with closing(sqlite3.connect(legacy)) as connection:
             connection.executescript("""
                 CREATE TABLE task (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
