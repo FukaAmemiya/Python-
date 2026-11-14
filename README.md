@@ -1,6 +1,6 @@
 # 双站小说下载器
 
-用于下载话本小说和 SF 轻小说（菠萝包）的文本章节，支持 Tkinter GUI、命令行、SQLite 断点续传和 UTF-8 TXT 导出。需要 **Python 3.10+**；GUI 及窗口测试还需要 Tcl/Tk 和可用的桌面会话。
+用于下载话本小说和 SF 轻小说（菠萝包）的公开文本章节，支持 Tkinter GUI、命令行、目录驱动整本下载、SQLite 断点续传以及 UTF-8 TXT / EPUB 3 导出。需要 **Python 3.10+**；GUI 及窗口测试还需要 Tcl/Tk 和可用的桌面会话。
 
 **当前入口为仓库根目录的 `novel_downloader.py`，以下命令均在仓库根目录执行。旧脚本已归档至 [`legacy/`](legacy/README.md)。**
 
@@ -43,7 +43,7 @@ python3 -m venv .novel_venv
 
 Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先使用同目录的 `.novel_venv`，不存在时使用系统 `python`，不会自动安装依赖。
 
-粘贴网址、选择保存目录，再点击“开始 / 继续”。窗口显示已保存章数和活动进度条；由于未获取全书总章数，不显示百分比。
+粘贴书籍主页、目录或章节网址，选择保存目录和输出格式（TXT、EPUB 或两者），再点击“开始 / 继续”。能够识别完整目录时显示已下载章数/总章数与确定进度；无法识别目录时仍使用活动进度条。
 
 ### CLI
 
@@ -54,11 +54,17 @@ Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先�
 # 指定起始网址与保存目录；请替换为实际章节网址
 .\.novel_venv\Scripts\python.exe novel_downloader.py --url "https://book.sfacg.com/Novel/书籍ID/分卷ID/章节ID/" --output "D:\Novels"
 
+# 仅生成 EPUB
+.\.novel_venv\Scripts\python.exe novel_downloader.py --url "https://www.ihuaben.com/book/书籍ID.html" --format epub
+
+# 同时生成 TXT 和 EPUB（默认）
+.\.novel_venv\Scripts\python.exe novel_downloader.py --url "https://www.ihuaben.com/book/书籍ID.html" --format both
+
 # 查看参数
 .\.novel_venv\Scripts\python.exe novel_downloader.py --help
 ```
 
-`--url` 会直接进入命令行下载，无需同时指定 `--cli`；`--output` 用于 CLI，也可与 `--cli` 组合。GUI 的保存目录在窗口内选择。交互模式在网址提示处输入 `q`、`quit` 或 `exit` 退出。
+`--url` 会直接进入命令行下载，无需同时指定 `--cli`；`--output` 用于 CLI，也可与 `--cli` 组合。`--format` 接受 `txt`、`epub`、`both`，默认 `both`。GUI 的保存目录在窗口内选择。交互模式在网址提示处输入 `q`、`quit` 或 `exit` 退出。
 
 ## 支持的网址
 
@@ -66,11 +72,12 @@ Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先�
 
 | 站点 / 页面 | 网址格式 | 起点 |
 | --- | --- | --- |
-| 话本书籍主页 | `https://www.ihuaben.com/book/书籍ID.html` 或 `https://www.ihuaben.com/book/书籍ID` | 页面目录中第一个可识别的章节链接 |
+| 话本书籍主页 / 目录 | `https://www.ihuaben.com/book/书籍ID.html` 或 `https://www.ihuaben.com/list/书籍ID.html` | 完整目录中第一章 |
 | 话本章节页 | `https://www.ihuaben.com/book/书籍ID/章节ID.html`，也识别 `/书籍ID/章节ID.html`、`/章节ID.html` 路径 | 当前章节 |
+| SF 书籍页 / 目录 | `https://book.sfacg.com/Novel/书籍ID/` 或 `https://book.sfacg.com/Novel/书籍ID/MainIndex/` | 目录中第一章 |
 | SF 章节页 | `https://book.sfacg.com/Novel/书籍ID/分卷ID/章节ID/` 或 `https://book.sfacg.com/Novel/书籍ID/分卷ID/章节ID.html` | 当前章节 |
 
-话本主页按页面目录顺序选取起点，不按章节 ID 排序；需要明确起点时请粘贴章节页。SF 必须提供具体章节阅读页，不支持从书籍主页或 `MainIndex` 目录页开始。下载从起点沿“下一章”链接继续，不会补下载起点之前的章节。
+两站优先获取章节目录并按网页顺序下载，不按章节 ID 排序；从章节页开始时只下载该章及后续章节。目录不可用时具体章节页退回“下一章”导航，书籍主页/目录页会报错而不误判完结。不会下载付费、需要登录或无法直接访问的章节。
 
 ## 保存位置与续传
 
@@ -79,6 +86,7 @@ Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先�
 | 文件（相对于保存目录） | 用途 |
 | --- | --- |
 | `话本_书名_任务标识前10位.txt` / `SF轻小说_书名_任务标识前10位.txt` | 按章节顺序导出的 UTF-8 正文；书名会清理非法文件名字符，新任务遇到同名文件会增加编号 |
+| `同名.epub` | EPUB 3 电子书，带章节目录；选择 EPUB 或双格式时生成 |
 | `.novel_state/任务标识.sqlite3` | 逐章保存正文与续传位置；任务标识为规范化起始网址的 SHA-256 前 20 位 |
 
 **恢复时使用相同起始网址和相同保存目录**，无需改填停止时的章节网址。查询参数、片段、尾斜杠及 HTTP/HTTPS 差异不影响任务标识；支持的域名别名也会统一。不同起始章节会建立独立任务，不会混合追加。
@@ -97,13 +105,14 @@ GUI 点击“停止并保存”后，会等待当前网络请求结束或超时�
 
 CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回网址提示处，使用 `--url` 时结束本次运行。避免在保存过程中再次中断或强制终止进程。
 
-**“未发现下一章”不等于全书完整。** 请对照网站目录确认。到达该状态的任务再次运行只重新导出已有内容，不检查网站更新；下载新增章节需以新增章节网址建立任务。
+**“未发现下一章”不等于全书完整。** 再次开始任务会重新获取目录；如原任务误判完结且目录还包含后续章节，会从最后一章后面的未保存章节继续。若站点目录本身不完整，仍需对照网页核实。
 
 ## 限制
 
 - 仅处理两站可直接访问的文本阅读页，不提供登录、验证码处理、付费章节解锁或图片章节识别。
 - 临时网络错误会退避重试，最多尝试 3 次；明确的 404 等错误直接报告。正文缺失、无效导航等错误不会作为小说正文写入。
 - 网站改版可能导致 HTML 选择器失效；离线测试通过不代表真实网站始终可用。
+- 不含参考项目番茄小说专属 API、全站搜索、语音合成和 Web UI；这些功能不属于此次双站架构升级。请遵守站点规则及作品授权。
 
 ## 离线测试
 
@@ -123,5 +132,6 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 - `novel_gui.py`：Tkinter 窗口与后台下载线程。
 - `novel_core.py`：站点解析、链接校验、请求重试与下载流程。
 - `novel_storage.py`：SQLite 状态保存与 TXT 原子导出。
+- `novel_epub.py`：不依赖额外库的 EPUB 3 导出。
 
 许可证见 [LICENSE](LICENSE)。
