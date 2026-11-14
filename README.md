@@ -4,9 +4,19 @@
 
 **当前入口为仓库根目录的 `novel_downloader.py`，以下命令均在仓库根目录执行。旧脚本已归档至 [`legacy/`](legacy/README.md)。**
 
-源码版本见 [Releases](https://github.com/FukaAmemiya/Python-/releases)。下载源码压缩包后先解压，再按以下步骤安装依赖。
+**Windows 用户可以直接下载独立 EXE，完全不需要安装 Python。** 只有需要修改源代码、调试或使用命令行的用户才需要下面的 Python 环境。
 
-## 安装依赖
+## Windows 直接下载 EXE（推荐）
+
+前往 **[Releases 下载页](https://github.com/FukaAmemiya/Python-/releases)**，在最新版本的 Assets 中下载 `NovelDownloader-Windows-x64.exe`，双击即可打开窗口。目标平台为 Windows 10/11 的 64 位系统。
+
+- 使用 PyInstaller 将 Python 运行时、Tkinter 和所需库打包在 EXE 中，接收者无需额外安装任何 Python 依赖。
+- Windows EXE 默认保存到 `%LOCALAPPDATA%\\NovelDownloader\\downloads`，可在软件里改为任意已有目录。
+- 第一次启动时会解压运行环境，因此可能较慢。程序未进行代码签名，Windows 可能弹出未知发布者的 SmartScreen 提示。请自行从本仓库验证来源及 Release 附带的 SHA-256。
+- 无需管理员权限，下载完成后可直接运行，不提供安装向导。
+- **升级以前的数据**：保留你原来的 `downloads` 文件夹和内部隐藏的 `.novel_state`；在新版窗口中选择旧目录，书架便会显示既有记录。
+
+## 开发者：从源码运行（需要 Python）
 
 获取仓库并进入程序目录：
 
@@ -41,9 +51,15 @@ python3 -m venv .novel_venv
 .\.novel_venv\Scripts\python.exe novel_downloader.py
 ```
 
-Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先使用同目录的 `.novel_venv`，不存在时使用系统 `python`，不会自动安装依赖。
+使用源码时，Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先使用同目录的 `.novel_venv`，不存在时使用系统 `python`，不会自动安装依赖。
 
 粘贴书籍主页、目录或章节网址，选择保存目录和输出格式（TXT、EPUB 或两者），再点击“开始 / 继续”。能够识别完整目录时显示已下载章数/总章数与确定进度；无法识别目录时仍使用活动进度条。
+
+### 下载书架
+
+桌面窗口的 **“我的书架”** 可以在当前保存目录中读取 SQLite 断点续传记录，搜索书名/站点/网址，查看已下载章节数、TXT 和 EPUB 状态。选中一本书后可 **检查更新/继续**，或直接打开导出文件。可选择**移除下载记录**：此操作会删除该书的 SQLite 断点文件，**不会删除 TXT/EPUB 文件**，但不能恢复下载进度。建议操作前先备份 `.novel_state`。
+
+书架扫描仅读取当前选择的保存目录，不访问系统其他用户的小说，不会因打开书架自动发起网络下载。
 
 ### 本机 Web UI
 
@@ -91,7 +107,7 @@ Windows 也可在安装依赖后双击 `启动小说下载器.bat`。它优先�
 
 ## 保存位置与续传
 
-默认保存目录是仓库根目录下的 **`downloads/`**，与启动命令所在的工作目录无关；也可在 GUI 或 CLI 中另行指定。
+**源码模式**默认保存目录为仓库根目录下的 `downloads/`。**Windows 独立 EXE**默认保存目录为 `%LOCALAPPDATA%\\NovelDownloader\\downloads`，避免 PyInstaller 临时解压目录重启后丢失数据。两种模式都允许在 GUI 中自行更改保存目录。
 
 | 文件（相对于保存目录） | 用途 |
 | --- | --- |
@@ -141,8 +157,12 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 .\.novel_venv\Scripts\python.exe -m unittest -v test_novel_downloader
 
 # 完整测试：窗口测试会创建隐藏窗口，需要 Tcl/Tk 和可用的桌面会话
-.\.novel_venv\Scripts\python.exe -m unittest -v test_novel_downloader test_novel_web test_novel_gui
+.\.novel_venv\Scripts\python.exe -m unittest -v test_novel_downloader test_novel_web test_novel_library test_novel_gui
 ```
+
+## Windows EXE 的自动构建与发布
+
+`.github/workflows/windows-release.yml` 在 Windows GitHub Actions Runner 上运行回归测试、PyInstaller `--onefile --windowed` 打包和冻结程序冒烟检查，再上传 EXE 与 SHA-256 到构建产物。**只有合并到 main 的正式提交**才会尝试创建 `v1.1.0` Release；PR 仅测试，不会发布。后续版本必须同步更改工作流的版本标记和 Release notes，避免旧版本的二进制文件被覆盖。
 
 ## 主要文件
 
@@ -151,6 +171,6 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 - `novel_core.py`：站点解析、链接校验、请求重试与下载流程。
 - `novel_storage.py`：SQLite 状态保存与 TXT 原子导出。
 - `novel_epub.py`：不依赖额外库的 EPUB 3 导出。
-- `novel_web.py`：仅在本机访问的浏览器界面。
+- `novel_web.py`：仅在本机访问的浏览器界面。\n- `novel_library.py`：下载书架与下载记录的只读索引。
 
 许可证见 [LICENSE](LICENSE)。
