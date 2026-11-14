@@ -92,7 +92,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-signed-release:
+  signed-release:
     name: SignPath approve, sign, verify and publish
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: windows-exe
