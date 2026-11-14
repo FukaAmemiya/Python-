@@ -92,142 +92,113 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  signed-release:
-    name: Sign, verify and publish
+signed-release:
+    name: SignPath approve, sign, verify and publish
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: windows-exe
-    runs-on: windows-2025
-    timeout-minutes: 30
+    runs-on: windows-latest
+    timeout-minutes: 120
     permissions:
       contents: write
-      id-token: write
+      actions: read
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       EXE_NAME: NovelDownloader-Windows-x64.exe
     steps:
       - uses: actions/checkout@v4
-      - name: Download the executable built in this same workflow run
-        uses: actions/download-artifact@v4
-        with:
-          name: NovelDownloader-unsigned-preview
-          path: dist
 
-      - name: Validate signing service configuration
+      - name: Require SignPath approval configuration and unused release version
         shell: pwsh
         env:
-          SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SIGNPATH_ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          foreach ($key in @(
-            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT', 'SIGNING_PROFILE',
-            'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID'
-          )) {
+          foreach ($key in @('SIGNPATH_ORG', 'SIGNPATH_PROJECT', 'SIGNPATH_POLICY',
+                             'SIGNPATH_ARTIFACT', 'SIGNPATH_TOKEN')) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key))) {
-              throw "Missing signing configuration: $key. No unsigned Release will be created."
+              throw "Missing $key. No unsigned Release will be published."
             }
-          }
-          if ($env:SIGNING_ENDPOINT -notmatch '^https://[a-z0-9-]+\.codesigning\.azure\.net/?$') {
-            throw 'AZURE_SIGNING_ENDPOINT must be an Artifact Signing service endpoint.'
           }
           gh release view "$env:RELEASE_TAG" --json tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            throw "Release $env:RELEASE_TAG already exists; refusing to replace it."
+            throw "Release $env:RELEASE_TAG already exists."
           }
           $existingTag = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to check remote release tags; refusing to publish.'
-          }
-          if ($existingTag) {
-            throw "Git tag $env:RELEASE_TAG already exists on origin; refusing to reuse it."
-          }
+          if ($LASTEXITCODE -ne 0) { throw 'Remote tag check failed.' }
+          if ($existingTag) { throw "Git tag $env:RELEASE_TAG already exists." }
 
-      # Use GitHub OIDC federation; no private key, PFX, or Azure client secret
-      # is stored in the source repository or uploaded as a build artifact.
-      - name: Authenticate to Azure with OIDC
-        uses: azure/login@v3
+      - name: Submit official GitHub artifact for SignPath Foundation signing
+        id: sign
+        uses: signpath/github-action-submit-signing-request@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ needs.windows-exe.outputs.unsigned_artifact_id }}
+          wait-for-completion: 'true'
+          wait-for-completion-timeout-in-seconds: '5400'
+          output-artifact-directory: ${{ github.workspace }}\signed
+          parameters: |
+            version: "${{ needs.windows-exe.outputs.pe_version }}"
 
-      - name: Authenticode sign with Azure Artifact Signing
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      - name: Verify trusted signature and trusted timestamp
+      - name: Verify Windows-trusted Authenticode signature and timestamp
         shell: pwsh
         run: |
-          $file = (Resolve-Path ".\dist\$env:EXE_NAME").Path
+          $file = (Resolve-Path ".\signed\$env:EXE_NAME").Path
           $signature = Get-AuthenticodeSignature -FilePath $file
           if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
-            throw "Signature is not trusted: $($signature.Status). Refusing publication."
+            throw "Signature invalid or untrusted: $($signature.Status)"
+          }
+          if ($signature.SignerCertificate.Subject -notmatch 'SignPath Foundation') {
+            throw "Unexpected publisher: $($signature.SignerCertificate.Subject)"
           }
           if ($null -eq $signature.TimeStamperCertificate) {
-            throw 'No trusted timestamp was found. Refusing publication.'
+            throw 'Signed EXE has no trusted timestamp.'
           }
-          $sdkRoot = Join-Path "${env:ProgramFiles(x86)}" 'Windows Kits\10\bin'
+          $sdkRoot = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits\10\bin'
           $signTool = Get-ChildItem $sdkRoot -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
             Sort-Object FullName -Descending | Select-Object -First 1
-          if ($null -eq $signTool) {
-            throw 'Windows SDK SignTool was not found.'
-          }
+          if ($null -eq $signTool) { throw 'Windows SDK SignTool unavailable.' }
           & $signTool.FullName verify /pa /v /tw $file
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Windows SignTool signature verification failed.'
-          }
-          "Verified publisher: $($signature.SignerCertificate.Subject)"
-          "Timestamp authority: $($signature.TimeStamperCertificate.Subject)"
+          if ($LASTEXITCODE -ne 0) { throw 'Authenticode verification failed.' }
 
-      # Hash after signing: Authenticode changes the EXE bytes.
-      - name: Create signed SHA-256 manifest and release notes
+      - name: Generate final signed EXE checksums and release notes
         shell: pwsh
         run: |
-          $exePath = ".\dist\$env:EXE_NAME"
-          $hash = (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $env:EXE_NAME" | Out-File ".\dist\SHA256SUMS.txt" -Encoding ascii
-          $publisher = (Get-AuthenticodeSignature $exePath).SignerCertificate.Subject
+          $hash = (Get-FileHash ".\signed\$env:EXE_NAME" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:EXE_NAME" | Out-File '.\signed\SHA256SUMS.txt' -Encoding ascii
           @(
-            "# $env:RELEASE_TAG · Windows Authenticode signed release",
+            "# $env:RELEASE_TAG - Windows signed release",
             "",
-            "Built from the official main branch and signed by Azure Artifact Signing.",
-            "Publisher certificate subject: $publisher",
+            "Free code signing provided by SignPath.io, certificate by SignPath Foundation.",
             "",
-            "Includes Windows x64 standalone GUI, bookshelf, TXT/EPUB export and resumable downloads.",
+            "Code signing policy: https://github.com/FukaAmemiya/Python-/blob/main/CODE_SIGNING.md",
+            "Privacy policy: https://github.com/FukaAmemiya/Python-/blob/main/PRIVACY.md",
             "",
-            "The EXE is verified using Windows Authenticode and an RFC 3161 timestamp.",
-            "SHA256SUMS.txt contains the digest of the final, signed EXE.",
-            "Code signing does not guarantee an immediate absence of SmartScreen warnings."
-          ) | Set-Content -Path "SIGNED_RELEASE_NOTES.md" -Encoding utf8
+            "Windows x64 standalone desktop EXE with bookshelf, TXT/EPUB export and resume.",
+            "SHA256SUMS.txt corresponds to the final signed executable.",
+            "Code signing does not guarantee SmartScreen reputation."
+          ) | Set-Content 'SIGNED_RELEASE_NOTES.md' -Encoding utf8
 
-      - name: Upload verified signed binary as workflow artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: NovelDownloader-Windows-x64-signed
           path: |
-            dist/NovelDownloader-Windows-x64.exe
-            dist/SHA256SUMS.txt
+            signed/NovelDownloader-Windows-x64.exe
+            signed/SHA256SUMS.txt
           if-no-files-found: error
 
-      - name: Publish signed GitHub Release
+      - name: Publish only verified SignPath signed GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$env:RELEASE_TAG" ".\dist\$env:EXE_NAME" ".\dist\SHA256SUMS.txt" --target "$env:GITHUB_SHA" --title "$env:RELEASE_TAG · Windows 已签名版" --notes-file "SIGNED_RELEASE_NOTES.md" --latest
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Creating the signed GitHub Release failed.'
-          }
+          gh release create "$env:RELEASE_TAG" ".\signed\$env:EXE_NAME" ".\signed\SHA256SUMS.txt" --target "$env:GITHUB_SHA" --title "$env:RELEASE_TAG - SignPath Foundation signed" --notes-file 'SIGNED_RELEASE_NOTES.md' --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Signed release publication failed.' }
