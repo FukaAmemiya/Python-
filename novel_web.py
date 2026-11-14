@@ -172,7 +172,7 @@ def serve(port=18423, output_dir=DEFAULT_OUTPUT_DIR):
             return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script>setInterval(() => { if (document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "SELECT") location.reload(); }, 5000);</script>
+<script>setInterval(() => {{ if (document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "SELECT") location.reload(); }}, 5000);</script>
 <title>小说下载器</title>
 <style>
 body{{font:16px system-ui,sans-serif;max-width:850px;margin:3em auto;
