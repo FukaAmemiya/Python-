@@ -18,6 +18,13 @@ class DownloadStore:
             self.connection.execute("PRAGMA synchronous = FULL")
             if self.connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise StorageError("下载记录损坏，已保留原文件，请选择其他保存目录。")
+            # 向旧版 SQLite 数据库添加目录排序表，不修改原章节与任务字段。
+            with self.connection:
+                self.connection.execute("""
+                    CREATE TABLE IF NOT EXISTS chapter_catalog (
+                        url TEXT PRIMARY KEY, catalog_position INTEGER NOT NULL UNIQUE
+                    )
+                """)
         except Exception:
             self.connection.close()
             raise
@@ -54,6 +61,32 @@ class DownloadStore:
         return self.connection.execute(
             "SELECT 1 FROM chapters WHERE url = ?", (url,)
         ).fetchone() is not None
+
+    def saved_urls(self):
+        return {
+            row[0] for row in self.connection.execute("SELECT url FROM chapters")
+        }
+
+    def set_catalog(self, urls):
+        """单事务更新目录快照，TXT 与 EPUB 按目录顺序导出。"""
+        if len(urls) != len(set(urls)):
+            raise StorageError("目录含有重复章节网址，已保留上次目录。")
+        with self.connection:
+            self.connection.execute("DELETE FROM chapter_catalog")
+            self.connection.executemany(
+                "INSERT INTO chapter_catalog(url, catalog_position) VALUES (?, ?)",
+                ((url, position) for position, url in enumerate(urls)),
+            )
+
+    def iter_chapters(self):
+        """目录中的章节按目录排序；未出现在当前目录的历史章节排在后面。"""
+        return self.connection.execute("""
+            SELECT chapters.* FROM chapters
+            LEFT JOIN chapter_catalog AS catalog ON catalog.url = chapters.url
+            ORDER BY
+                CASE WHEN catalog.catalog_position IS NULL THEN 1 ELSE 0 END,
+                catalog.catalog_position, chapters.position
+        """)
 
     def last_chapter_url(self):
         row = self.connection.execute(
@@ -99,9 +132,7 @@ class DownloadStore:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(f"书名：{task['book_name']}\n来源：{task['source']}\n")
                 stream.write(f"起始网址：{task['start_url']}\n" + "=" * 50 + "\n\n")
-                for chapter in self.connection.execute(
-                    "SELECT * FROM chapters ORDER BY position"
-                ):
+                for chapter in self.iter_chapters():
                     stream.write(chapter["title"] + "\n" + "-" * 30 + "\n")
                     stream.write(chapter["content"] + "\n\n" + "=" * 50 + "\n\n")
                 stream.flush()
