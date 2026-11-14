@@ -423,10 +423,11 @@ class NovelDownloader:
             state_dir.mkdir(exist_ok=True)
             key = task_key(url)
             database = state_dir / f"{key}.sqlite3"
+            existing_task = database.exists()
 
             # 优先使用完整目录：比阅读页上的“下一章”导航更稳定。
             # 对具体章节页，如果目录不可用仍可沿导航继续。
-            catalog = adapter.catalog(url, required=adapter.is_catalog(url) and not database.exists())
+            catalog = adapter.catalog(url, required=adapter.is_catalog(url) and not existing_task)
             chapters = catalog[1] if catalog else []
             chapter_positions = {item: index for index, item in enumerate(chapters)}
             # 章节网址作为起点时，进度只计算该章节及之后的内容。
@@ -436,7 +437,7 @@ class NovelDownloader:
             if chapters:
                 self.log(f"已识别完整目录：共 {len(chapters)} 章；本任务范围 {total_count} 章。")
 
-            if database.exists():
+            if existing_task:
                 store = DownloadStore(database)
                 task = store.task()
                 if task["start_url"] != url:
@@ -525,7 +526,7 @@ class NovelDownloader:
             status = "end_reached"
             if total_count is not None:
                 message = f"下载任务结束，已保存 {saved_count} 章，本任务目录范围共 {total_count} 章。"
-            elif database.exists() and not catalog and not current_url:
+            elif existing_task and not catalog and not current_url:
                 message = f"已导出本地 {saved_count} 章；目录不可访问，无法确认网站是否新增章节。"
             else:
                 message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
