@@ -1,83 +1,78 @@
-# Code signing policy / Windows 数字签名政策
+# Code signing policy / 代码签名政策
 
-## 当前状态
+**当前状态：v1.1.0 为未签名版本。SignPath Foundation 申请尚需仓库维护者本人提交并通过审核，当前没有已获批的免费签名账户或已签名 EXE。**
 
-- **v1.1.0 已发布的 Windows EXE 没有 Authenticode 数字签名。**
-- GitHub Actions 现在区分两类构建：
-  - Push / Pull Request：只构建并测试 **未签名的预览产物**，不会创建 Release；
-  - 从 `main` 手动触发带新版本号的正式发布：先完成受信任 Authenticode 签名、RFC 3161 时间戳与 Windows 验证，**全部成功才创建 Release**。
-- **配置签名服务前，没有可用的已签名新版本；不能把 GitHub 提供的 SHA-256 校验等同于受信任的 Windows 发布者签名。**
-- 仅签署由本仓库正式 GitHub Actions 在 Windows Runner 构建的二进制，不签署用户提交的任意文件或 Pull Request 产物。
+**Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).** 这段说明描述的是计划采用的签名服务，**不表示当前版本已经获得签名**。
 
-## 首选实现：Azure Artifact Signing（原 Trusted Signing）
+## 源代码、发布与团队角色
 
-本仓库使用 [微软官方 Artifact Signing GitHub Action](https://github.com/Azure/artifact-signing-action) 及 [Azure OIDC 登录](https://github.com/Azure/login)，密钥保存在微软管理的 HSM 中，**不需要把 PFX 私钥或 Azure client secret 上传 GitHub**。
+- **项目**：双站小说下载器 (FukaAmemiya) / FukaAmemiya Novel Downloader
+- **源代码**：https://github.com/FukaAmemiya/Python-
+- **发布与下载**：https://github.com/FukaAmemiya/Python-/releases
+- **许可证**：GNU GPL-3.0，源码和构建工作流均公开。
+- **Authors / committers**：项目 GitHub 仓库所有者 [FukaAmemiya](https://github.com/FukaAmemiya) 及其明确授权的提交成员。
+- **Reviewers**：由仓库维护者审查外部贡献者的 PR，特别是依赖、构建脚本、安全相关修改。
+- **Signing approver**：计划由仓库维护者 FukaAmemiya 承担。正式使用时必须在 SignPath 中设置**每个发行版本人工审批**。
+- **仓库与 SignPath 账户**：参与代码签名和版本发布的人员必须启用多因素认证 (MFA)。
 
-> Azure Public Trust 签名服务需要付费 Azure 订阅、身份验证、签名账户和证书配置文件。不同个人/组织及地区的资格要求可能不同，请先以微软当前 [官方要求](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) 为准。GitHub 工作流无法代替你完成身份验证。
+仓库必须在申请通过后检查/完善 GitHub 分支保护和审查制度。只有被授权的维护者才能批准正式发行，不能用未审查的 PR 直接触发发布签名。
 
-### 需要由仓库管理员完成的准备
+## Privacy policy / 隐私政策
 
-1. 在 Azure 中启用 **Artifact Signing**，完成 **Public Trust** 身份验证，创建签名账户与证书配置文件。不要使用仅供企业内部使用的 **Private Trust** 配置文件面向大众发布。
-2. 创建 Microsoft Entra 应用注册，给应用授予对应证书配置文件的 **Artifact Signing Certificate Profile Signer** 角色。
-3. 在该应用注册中配置 **Federated Credential / GitHub Actions OIDC**：
-   - Issuer：`https://token.actions.githubusercontent.com`
-   - Organization / repository：`FukaAmemiya/Python-`
-   - Entity type：Branch；Branch：`main`
-   - Subject 应为：`repo:FukaAmemiya/Python-:ref:refs/heads/main`
-   - Audience：`api://AzureADTokenExchange`
-   - 只授权正式 `main` 分支；不要允许所有 Pull Request、所有分支调用签名服务。
-4. 打开此仓库的 **Settings → Secrets and variables → Actions**：
+请参阅 [PRIVACY.md](PRIVACY.md)。除用户主动发起的小说下载/更新请求外，应用不向其他联网系统发送用户数据；不包含账号、广告、遥测或后台数据分析。下载内容和 SQLite 续传记录保存在用户指定的本地目录。用户主动下载时，相应小说网站可以看到正常 HTTP 连接信息。
 
-   **Repository secrets**（来自 Azure 身份/订阅）：
+## 签名发布流程
 
-   | 名称 | 内容 |
-   | --- | --- |
-   | `AZURE_CLIENT_ID` | Entra 应用 Client ID |
-   | `AZURE_TENANT_ID` | Azure Tenant ID |
-   | `AZURE_SUBSCRIPTION_ID` | Azure Subscription ID |
+- 普通 Pull Request / main 构建：只进行单元测试、PyInstaller 单文件打包、启动冒烟检查，上传**未签名的预览 artifact**。不会发布新的正式 Release。
+- 正式签名：由项目维护者在 **GitHub Actions → Windows EXE build and SignPath Release → Run workflow** 的 **main** 分支填写全新版本号（例如 \`v1.1.1\`）触发。
+- GitHub-hosted Windows Runner 生成带 Windows PE 版本元数据的 EXE，并通过 \`actions/upload-artifact@v4\` 创建有来源证明的构建产物。
+- 官方 \`signpath/github-action-submit-signing-request@v2\` 通过 artifact ID 提交签名请求，要求 SignPath 校验 GitHub 仓库、构建环境、分支和提交来源；**发行签名需 SignPath 人工审批**。
+- 使用 SignPath Foundation 的可信发行证书签名。私钥由签名服务管理，不存在 GitHub 仓库或工作流。
+- 工作流下载签名产物，并使用 Windows \`Get-AuthenticodeSignature\` 与 \`SignTool verify /pa /v /tw\` 核验可信证书、发布者及时间戳。
+- **所有检查通过才**对最终签名 EXE 计算 SHA-256 并上传正式 Releases。若未配置账号、签名请求被拒、签名或时间戳验证失败，将终止，不会退回发布未签名文件。
+- 版本号只用于新的、未使用的 Git tag；不能覆盖 \`v1.1.0\` 的未签名历史发行文件。
 
-   **Repository variables**（不包含私钥）：
+注意：代码签名本身不等于安全审计，也不能保证 Windows SmartScreen 不再显示信誉警告。
 
-   | 名称 | 内容 |
-   | --- | --- |
-   | `AZURE_SIGNING_ENDPOINT` | 与账户区域一致的 HTTPS endpoint，如 `https://weu.codesigning.azure.net` |
-   | `AZURE_SIGNING_ACCOUNT` | Artifact Signing 账户名称 |
-   | `AZURE_SIGNING_PROFILE` | 通过身份验证的 Public Trust 证书配置文件名称 |
+## SignPath Foundation 申请后如何配置
 
-5. 在 GitHub **Actions → Windows EXE build and signed Release → Run workflow** 选择 **main**，填入新的、尚未使用过的版本号，例如 `v1.1.1`。本工作流不会覆盖已有 `v1.1.0`。
-6. 发布前自动执行：PyInstaller 打包 → EXE 启动测试 → Azure 证书签名及 SHA-256 时间戳 → `Get-AuthenticodeSignature` 校验 Windows 信任状态、签名证书和时间戳 → `SignTool verify /pa /v /tw` → 计算 **签名后**的 SHA-256 → 上传 Release。
-7. 只有所有检查通过时才发布正式 Release。签名服务、凭据、证书链或时间戳出现问题时，工作流会失败，不会退回发布未签名 EXE。
+申请入口：https://signpath.org/apply ，条款：https://signpath.org/terms 。
 
-### 如何验证下载的程序
+1. 在申请表填写 Project Name = \`双站小说下载器 (FukaAmemiya)\`，仓库 URL = \`https://github.com/FukaAmemiya/Python-\`，Homepage 同仓库 URL，Download URL = \`https://github.com/FukaAmemiya/Python-/releases\`。若 SignPath 要求英文简介，可介绍本项目为下载话本小说和 SF 轻小说公开文本章节的 Windows 桌面工具，提供断点续传、书架、TXT/EPUB 导出。
+2. 签署者身份、项目声誉、开源许可证、现有发行、代码审查和隐私声明由 SignPath Foundation 审核。**该项目较新，申请可能不会被批准；不能声称已经获批。**
+3. **审核通过后**，按 SignPath 提供的组织信息登录 SignPath.io。将 GitHub.com 作为 Trusted Build System，并按要求安装 SignPath GitHub App、授权此仓库、为项目启用 Origin Verification。
+4. 在 SignPath 项目中建立符合发行条件的签名策略，例如 slug \`release-signing\`：使用 Foundation 发行证书、只允许 GitHub-hosted CI 来自 \`main\`、每次签名需维护者手动批准。不要使用测试证书代替发行证书。
+5. 将仓库中的 [SignPath Artifact Configuration XML](.signpath/artifact-configuration.xml) 配置到 SignPath 项目中（例如使用 \`novel-downloader-exe\` 作为配置 slug）。它要求 GitHub Actions 上传的 ZIP 内有单个 \`NovelDownloader-Windows-x64.exe\`，并严格核验 ProductName、FileVersion、ProductVersion、CompanyName 和原文件名。构建脚本 [build_version_info.py](build_version_info.py) 生成 Windows 资源信息，发布时从版本号派生 \`1.1.1.0\` 这样的资源版本。
+6. 在 GitHub **Settings → Secrets and variables → Actions** 配置：
 
-在 Windows PowerShell 中执行：
+   | 类型 | 名称 | 内容 |
+   | --- | --- | --- |
+   | Secret | \`SIGNPATH_API_TOKEN\` | 仅有项目/策略签名请求权限的 SignPath API token，**切勿公开** |
+   | Variable | \`SIGNPATH_ORGANIZATION_ID\` | SignPath Organization ID |
+   | Variable | \`SIGNPATH_PROJECT_SLUG\` | SignPath 项目 slug |
+   | Variable | \`SIGNPATH_SIGNING_POLICY_SLUG\` | 发行签名策略 slug，如 \`release-signing\` |
+   | Variable | \`SIGNPATH_ARTIFACT_CONFIGURATION_SLUG\` | 发行工件配置 slug，如 \`novel-downloader-exe\` |
 
-```powershell
+7. 从 \`main\` 手动触发新的发行（如 \`v1.1.1\`），SignPath 收到申请后在网页批准签名请求。GitHub Actions 会等待有限时间；如果审批超时或未通过，**不会发布任何未签名 EXE**。
+8. 验证新版 Windows 文件属性中的 **数字签名**，发布者证书应显示 SignPath Foundation；与 Release 提供的签名后 \`SHA256SUMS.txt\` 一致。
+
+## 如何在 Windows 上验证
+
+\`\`\`powershell
 Get-AuthenticodeSignature .\NovelDownloader-Windows-x64.exe |
-    Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate
+    Format-List Status,SignerCertificate,TimeStamperCertificate
 
 Get-FileHash .\NovelDownloader-Windows-x64.exe -Algorithm SHA256
-```
 
-签名的 `Status` 应为 `Valid`，签名者与时间戳证书应符合 Release 所述。使用 Windows SDK 还可执行：
-
-```powershell
+# 若 Windows SDK 已安装，也可以使用：
 signtool verify /pa /v /tw .\NovelDownloader-Windows-x64.exe
-```
+\`\`\`
 
-与 Release 中的 `SHA256SUMS.txt` 对比时，使用**最终签名后的文件**，因为签名会改变 EXE 内容。
+检查状态应为 \`Valid\`、签名者为 SignPath Foundation，签名时间戳存在。签名后 EXE 字节与旧未签名版本不同，**必须比较对应签名版本发布的 SHA-256**。
 
-## 其他可信签名方案
+## 官方资料
 
-[SignPath Foundation](https://signpath.org/) 提供符合条件的开源项目免费代码签名。项目具有 GPL-3.0 开源许可证，可考虑申请，但必须由维护者提交项目资料并接受审批，**本仓库尚未取得该服务的批准，也没有配置 SignPath 的发布工作流**。若后续选择该方案，可替换本仓库的 Azure 签名步骤。
-
-传统 CA 提供的 OV/EV 证书也可以实现 Authenticode，但通常需要硬件令牌或 HSM，不能简单地把私钥导出到 GitHub Actions。**不要把 PFX、证书私钥、Azure client secret 或令牌提交到仓库、Issue、PR 或聊天记录中。**
-
-## 重要限制
-
-- 数字签名可以证明签名者身份并检测文件篡改，**并不代表软件安全审计通过**。
-- 新签名身份仍可能触发 Windows SmartScreen 的信誉提示；没有任何签名工作流能保证首次发布便完全消除警告。
-- 旧版 `v1.1.0` 不会因为新工作流而自动被签名；必须有可用的签名身份，并重新发布新版本。
-- 维护者应开启多因素认证，限制有权修改签名工作流、Azure 账户和正式 Release 的人员。
-
-参考： [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool) · [Azure Artifact Signing GitHub Actions](https://github.com/Azure/artifact-signing-action) · [微软的 Windows 签名选项](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)
+- [SignPath Foundation 申请条件](https://signpath.org/terms)
+- [SignPath GitHub Actions / Origin Verification](https://docs.signpath.io/trusted-build-systems/github)
+- [SignPath Artifact Configuration](https://docs.signpath.io/artifact-configuration/)
+- [SignPath Foundation 免费申请](https://signpath.org/apply)
