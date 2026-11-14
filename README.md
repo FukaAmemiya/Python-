@@ -1,6 +1,6 @@
 # 双站小说下载器
 
-用于下载话本小说和 SF 轻小说（菠萝包）的公开文本章节，支持 Tkinter GUI、命令行、目录驱动整本下载、SQLite 断点续传以及 UTF-8 TXT / EPUB 3 导出。需要 **Python 3.10+**；GUI 及窗口测试还需要 Tcl/Tk 和可用的桌面会话。
+用于下载话本小说和 SF 轻小说（菠萝包）的公开文本章节，支持桌面 GUI、下载书架、命令行、目录驱动整本下载、SQLite 断点续传和 TXT / EPUB 3 导出。**Windows 用户直接下载 EXE 即可运行；只有从源码运行才需要 Python 3.10+。**
 
 **当前入口为仓库根目录的 `novel_downloader.py`，以下命令均在仓库根目录执行。旧脚本已归档至 [`legacy/`](legacy/README.md)。**
 
@@ -11,7 +11,7 @@
 前往 **[Releases 下载页](https://github.com/FukaAmemiya/Python-/releases)**，在最新版本的 Assets 中下载 `NovelDownloader-Windows-x64.exe`，双击即可打开窗口。目标平台为 Windows 10/11 的 64 位系统。
 
 - 使用 PyInstaller 将 Python 运行时、Tkinter 和所需库打包在 EXE 中，接收者无需额外安装任何 Python 依赖。
-- Windows EXE 默认保存到 `%LOCALAPPDATA%\\NovelDownloader\\downloads`，可在软件里改为任意已有目录。
+- Windows EXE 默认保存到 `%LOCALAPPDATA%\NovelDownloader\downloads`，可在软件里改为任意已有目录。
 - 第一次启动时会解压运行环境，因此可能较慢。程序未进行代码签名，Windows 可能弹出未知发布者的 SmartScreen 提示。请自行从本仓库验证来源及 Release 附带的 SHA-256。
 - 无需管理员权限，下载完成后可直接运行，不提供安装向导。
 - **升级以前的数据**：保留你原来的 `downloads` 文件夹和内部隐藏的 `.novel_state`；在新版窗口中选择旧目录，书架便会显示既有记录。
@@ -107,7 +107,7 @@ python3 -m venv .novel_venv
 
 ## 保存位置与续传
 
-**源码模式**默认保存目录为仓库根目录下的 `downloads/`。**Windows 独立 EXE**默认保存目录为 `%LOCALAPPDATA%\\NovelDownloader\\downloads`，避免 PyInstaller 临时解压目录重启后丢失数据。两种模式都允许在 GUI 中自行更改保存目录。
+**源码模式**默认保存目录为仓库根目录下的 `downloads/`。**Windows 独立 EXE**默认保存目录为 `%LOCALAPPDATA%\NovelDownloader\downloads`，避免 PyInstaller 临时解压目录重启后丢失数据。两种模式都允许在 GUI 中自行更改保存目录。
 
 | 文件（相对于保存目录） | 用途 |
 | --- | --- |
