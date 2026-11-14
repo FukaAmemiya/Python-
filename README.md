@@ -12,7 +12,7 @@
 
 - 使用 PyInstaller 将 Python 运行时、Tkinter 和所需库打包在 EXE 中，接收者无需额外安装任何 Python 依赖。
 - Windows EXE 默认保存到 `%LOCALAPPDATA%\NovelDownloader\downloads`，可在软件里改为任意已有目录。
-- 第一次启动时会解压运行环境，因此可能较慢。程序未进行代码签名，Windows 可能弹出未知发布者的 SmartScreen 提示。请自行从本仓库验证来源及 Release 附带的 SHA-256。
+- 第一次启动时会解压运行环境，因此可能较慢。**v1.1.0 为未签名旧版**。后续签名版须完成身份验证和签名校验才能发布，仍可能遇到 SmartScreen 的信誉提示。请通过 [数字签名政策](CODE_SIGNING.md) 核实各版本的签名状态。
 - 无需管理员权限，下载完成后可直接运行，不提供安装向导。
 - **升级以前的数据**：保留你原来的 `downloads` 文件夹和内部隐藏的 `.novel_state`；在新版窗口中选择旧目录，书架便会显示既有记录。
 
@@ -162,7 +162,9 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 
 ## Windows EXE 的自动构建与发布
 
-`.github/workflows/windows-release.yml` 在 Windows GitHub Actions Runner 上运行回归测试、PyInstaller `--onefile --windowed` 打包和冻结程序冒烟检查，再上传 EXE 与 SHA-256 到构建产物。**只有合并到 main 的正式提交**才会尝试创建 `v1.1.0` Release；PR 仅测试，不会发布。后续版本必须同步更改工作流的版本标记和 Release notes，避免旧版本的二进制文件被覆盖。
+`.github/workflows/windows-release.yml` 会在 Pull Request 和 `main` 推送时完成 Windows 回归测试、PyInstaller 打包与启动冒烟检查，并上传 **未签名预览产物**，但不会将其发布到 Releases。只有仓库维护者从 **Actions → Windows EXE build and signed Release → Run workflow** 在 `main` 分支手动输入全新版本号（如 `v1.1.1`），才会尝试通过 **Azure Artifact Signing + GitHub OIDC** 签署 EXE。签名、可信时间戳、Windows 验证全部通过后，才计算签名后的 SHA-256 并发布正式 Release。
+
+**尚未配置受信任签名身份时，签名发布步骤会失败，不会退回发布未签名 EXE。** 证书获取、Azure 设置与其他开源免费方案请参阅 [CODE_SIGNING.md：代码签名政策](CODE_SIGNING.md)。
 
 ## 主要文件
 
