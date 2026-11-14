@@ -41,6 +41,7 @@ class DownloadProgress:
     book_name: str
     chapter_title: str
     saved_count: int
+    total_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class DownloadResult:
     saved_count: int
     output_path: Path | None
     message: str
+    exports: tuple[Path, ...] = ()
 
 
 def normalize_url(url):
@@ -103,6 +105,10 @@ class SiteAdapter:
     def is_catalog(self, url):
         raise NotImplementedError
 
+    def catalog(self, url, required=False):
+        """返回 (书名, 按网页顺序排列的章节链接)，不可用时返回 None。"""
+        return None
+
     def validate_related(self, current_url, target):
         if urlsplit(current_url).hostname != urlsplit(target).hostname:
             raise DownloadError("章节链接跳转到了其他网站，已停止。")
@@ -113,7 +119,9 @@ class SiteAdapter:
     def find_next(self, soup, current_url):
         page_url = getattr(soup, "_source_url", None) or current_url
         for anchor in soup.find_all("a"):
-            if re.sub(r"\s+", "", anchor.get_text()) not in self.NEXT_TEXTS:
+            label = re.sub(r"\s+", "", anchor.get_text(" ", strip=True))
+            hint = re.sub(r"\s+", "", anchor.get("title", "") or anchor.get("aria-label", ""))
+            if not any(label.startswith(t) or hint.startswith(t) for t in self.NEXT_TEXTS):
                 continue
             href = (anchor.get("href") or "").strip()
             # 某些站点末章保留禁用的按钮。
@@ -152,34 +160,66 @@ class HuabenAdapter(SiteAdapter):
     NEXT_TEXTS = ("下一章", "下一篇")
 
     def book_id(self, url):
-        match = re.search(r"/book/(\d+)(?:/|\.html|$)", urlsplit(url).path)
+        path = urlsplit(url).path
+        match = re.search(r"^/(?:book|list)/(\d+)(?:/|\.html|$)", path)
         return match.group(1) if match else None
 
     def is_catalog(self, url):
-        return re.fullmatch(r"/book/\d+(?:\.html)?", urlsplit(url).path) is not None
+        path = urlsplit(url).path
+        return (re.fullmatch(r"/book/\d+(?:\.html)?", path) is not None
+                or re.fullmatch(r"/list/\d+\.html", path) is not None)
+
+    def catalog(self, url, required=False):
+        book_id = self.book_id(url)
+        if not book_id:
+            return None
+        index_url = f"{HUABEN_BASE}/list/{book_id}.html"
+        try:
+            soup = self.dl._get_soup(index_url)
+        except (DownloadError, KeyError) as error:
+            if required:
+                raise DownloadError(f"话本目录请求失败：{error}") from error
+            self.dl.log("话本完整目录暂不可访问，将尝试下一章导航。")
+            return None
+        chapters = self._catalog_links(soup, index_url, book_id)
+        if not chapters:
+            if required:
+                raise DownloadError("话本完整目录没有可识别章节，请检查网页是否改版。")
+            self.dl.log("话本完整目录没有识别到章节，将尝试下一章导航。")
+            return None
+        heading = soup.find("h1")
+        name = self.clean_title(heading.get_text(" ", strip=True)) if heading else ""
+        if not name:
+            title = soup.find("title")
+            name = self.clean_title(title.get_text().split("章节目录")[0]) if title else "话本小说作品"
+        return name, chapters
+
+    def _catalog_links(self, soup, index_url, book_id):
+        links, seen = [], set()
+        for anchor in soup.select("a[href]"):
+            try:
+                target = normalize_url(urljoin(index_url, anchor["href"]))
+            except (DownloadError, ValueError):
+                continue
+            if (self.book_id(target) != book_id
+                    or not self.CHAPTER_RE.search(urlsplit(target).path)
+                    or target in seen):
+                continue
+            seen.add(target)
+            links.append(target)
+        return links
 
     def prepare(self, url):
         soup = self.dl._get_soup(url)
         if soup.find("div", id="contentsource"):
             title = soup.find("title")
-            name = self.clean_title(title.get_text().split("-")[0]) if title else "话本小说作品"
+            raw = title.get_text(" ", strip=True) if title else ""
+            match = re.search(r"-《(.+?)》第\d+章", raw)
+            name = match.group(1) if match else self.clean_title(raw.split("-")[0])
             self.dl._cache[url] = soup
             self.dl.log("检测到章节页，从当前章节开始。")
-            return name, url
-        name_element = soup.find("h1", class_="text-danger")
-        if name_element is None:
-            raise DownloadError("未识别到话本书籍页或正文，请检查网址和访问状态。")
-        for span in soup.select("span.chapterTitle"):
-            link = span.find("a", href=True)
-            if link:
-                chapter_url = normalize_url(urljoin(
-                    getattr(soup, "_source_url", None) or url, link["href"]
-                ))
-                self.validate_related(url, chapter_url)
-                if self.CHAPTER_RE.search(urlsplit(chapter_url).path):
-                    self.dl.log("从页面目录中的第一项开始下载。")
-                    return self.clean_title(name_element.get_text()), chapter_url
-        raise DownloadError("没有找到章节列表，请尝试粘贴第一章阅读页网址。")
+            return name or "话本小说作品", url
+        raise DownloadError("未识别到话本正文，请使用书籍主页、目录或章节页网址。")
 
     @staticmethod
     def _parse_paragraph(paragraph):
@@ -213,9 +253,40 @@ class SfacgAdapter(SiteAdapter):
     def is_catalog(self, url):
         return re.fullmatch(r"/Novel/\d+(?:/MainIndex)?", urlsplit(url).path, re.I) is not None
 
+    def catalog(self, url, required=False):
+        book_id = self.book_id(url)
+        if not book_id:
+            return None
+        index_url = f"{SFACG_BASE}/Novel/{book_id}/MainIndex/"
+        try:
+            soup = self.dl._get_soup(index_url)
+        except (DownloadError, KeyError) as error:
+            if required:
+                raise DownloadError(f"SF 目录不可访问：{error}") from error
+            self.dl.log("SF 目录不可用，退回阅读页下一章导航。")
+            return None
+        links, seen = [], set()
+        for anchor in soup.select("a[href]"):
+            try:
+                target = normalize_url(urljoin(index_url, anchor["href"]))
+            except (DownloadError, ValueError):
+                continue
+            if (self.book_id(target) == book_id
+                    and self.CHAPTER_RE.search(urlsplit(target).path)
+                    and target not in seen):
+                seen.add(target)
+                links.append(target)
+        if not links:
+            if required:
+                raise DownloadError("SF 目录没有识别到章节，请粘贴具体阅读页。")
+            return None
+        title = soup.find("title")
+        name = title.get_text(" ", strip=True).split("-")[0] if title else "SF轻小说作品"
+        return name, links
+
     def prepare(self, url):
         if not self.CHAPTER_RE.search(urlsplit(url).path):
-            raise DownloadError("SF 轻小说请粘贴具体章节的阅读页网址。")
+            raise DownloadError("SF 轻小说请粘贴章节页，或提供书籍主页/目录页。")
         soup = self.dl._get_soup(url)
         self.parse_chapter(soup, url)
         self.dl._cache[url] = soup
