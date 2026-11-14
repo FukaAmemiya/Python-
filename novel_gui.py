@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from novel_core import DEFAULT_OUTPUT_DIR, DownloadError, DownloadResult, NovelDownloader, normalize_url
+from novel_library import BookshelfWindow
 
 
 class NovelApp:
@@ -21,6 +22,7 @@ class NovelApp:
         self.busy = False
         self.closing = False
         self.output_path = None
+        self.bookshelf = None
 
         root.title("小说下载器 · 话本 / SF轻小说")
         root.geometry("920x680")
@@ -80,6 +82,7 @@ class NovelApp:
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(buttons, text="停止并保存", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=10)
+        ttk.Button(buttons, text="我的书架", command=self.open_bookshelf).pack(side="left")
         self.open_text_button = ttk.Button(buttons, text="打开文件", command=self.open_text, state="disabled")
         self.open_text_button.pack(side="right")
         ttk.Button(buttons, text="打开目录", command=self.open_directory).pack(side="right", padx=10)
@@ -108,6 +111,22 @@ class NovelApp:
         root.bind("<Return>", lambda _: self.start() if not self.busy else None)
         self.url_entry.focus_set()
         root.after(100, self.poll_events)
+
+    def open_bookshelf(self):
+        if self.bookshelf is not None and self.bookshelf.window.winfo_exists():
+            self.bookshelf.window.lift()
+            return
+        self.bookshelf = BookshelfWindow(
+            self.root, self.directory.get(), self.update_from_bookshelf, self.open_path,
+            lambda: self.busy,
+        )
+
+    def update_from_bookshelf(self, url, directory):
+        if self.busy:
+            return
+        self.url.set(url)
+        self.directory.set(directory)
+        self.start()
 
     def choose_directory(self):
         directory = filedialog.askdirectory(parent=self.root, title="选择小说保存目录")
@@ -206,6 +225,8 @@ class NovelApp:
                 self.detail.set(f"已保存 {value.saved_count} 章" +
                                 (f" · {value.output_path.name}" if value.output_path else ""))
                 self.open_text_button.configure(state="normal" if value.output_path else "disabled")
+                if self.bookshelf is not None and self.bookshelf.window.winfo_exists():
+                    self.bookshelf.refresh()
                 if self.closing:
                     self.root.destroy()
                     return
