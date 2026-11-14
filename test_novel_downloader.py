@@ -293,6 +293,22 @@ class DownloadTests(unittest.TestCase):
         store.set_catalog(["chapter1"])
         self.assertEqual(store.iter_chapters().fetchone()["content"], "原文")
 
+    def test_existing_book_can_export_while_catalog_offline(self):
+        entry = "https://www.ihuaben.com/book/1.html"
+        first = "https://www.ihuaben.com/book/1/100.html"
+        database = self.directory / ".novel_state" / f"{core.task_key(entry)}.sqlite3"
+        database.parent.mkdir()
+        store = DownloadStore(database)
+        store.initialize(entry, "旧书", "话本小说", first, "旧书.txt")
+        store.save_chapter(first, "第一章", "原本保存的内容", None)
+        store.close()
+        dl = self.downloader({})
+        result = dl.run(entry, self.directory)
+        self.assertEqual(result.status, "end_reached")
+        self.assertEqual(result.saved_count, 1)
+        self.assertIn("无法确认网站是否新增章节", result.message)
+        self.assertIn("原本保存的内容", result.output_path.read_text(encoding="utf-8"))
+
     def test_chapter_page_progress_uses_requested_range(self):
         entry = "https://www.ihuaben.com/book/1/300.html"
         index = "https://www.ihuaben.com/list/1.html"
