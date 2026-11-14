@@ -397,12 +397,16 @@ class NovelDownloader:
     def _format_title(raw, count):
         return raw if re.search(r"第.{1,20}章", raw) else f"第{count}章 {raw}"
 
-    def run(self, url, output_dir=DEFAULT_OUTPUT_DIR):
+    def run(self, url, output_dir=DEFAULT_OUTPUT_DIR, output_format="txt"):
+        if output_format not in ("txt", "epub", "both"):
+            raise ValueError("输出格式必须是 txt、epub 或 both。")
         store = None
         ready = False
         output_path = None
+        exports = []
         book_name = ""
         saved_count = 0
+        total_count = None
         status, message = "failed", "下载未开始。"
         self._cache.clear()
         try:
@@ -415,6 +419,15 @@ class NovelDownloader:
             state_dir.mkdir(exist_ok=True)
             key = task_key(url)
             database = state_dir / f"{key}.sqlite3"
+
+            # 优先使用完整目录：比阅读页上的“下一章”导航更稳定。
+            # 对具体章节页，如果目录不可用仍可沿导航继续。
+            catalog = adapter.catalog(url, required=adapter.is_catalog(url))
+            chapters = catalog[1] if catalog else []
+            total_count = len(chapters) or None
+            if total_count:
+                self.log(f"已识别完整目录：共 {total_count} 章。")
+
             if database.exists():
                 store = DownloadStore(database)
                 task = store.task()
@@ -425,10 +438,26 @@ class NovelDownloader:
                 saved_count = store.count()
                 ready = True
                 self.log(f"恢复任务：{book_name}，已保存 {saved_count} 章。")
+                if not current_url and chapters and saved_count:
+                    last = store.last_chapter_url()
+                    if last in chapters:
+                        remaining = chapters[chapters.index(last) + 1:]
+                        next_missing = next(
+                            (item for item in remaining if not store.contains(item)), None
+                        )
+                        if next_missing:
+                            store.resume_at(next_missing)
+                            current_url = next_missing
+                            self.log("目录仍有未下载章节，已修复旧版本的误判完结状态。")
             else:
-                self.log(f"正在识别 {adapter.source_name} 页面……")
-                book_name, first_url = adapter.prepare(url)
-                # prepare 请求过的章节页由缓存供主循环复用。
+                if adapter.is_catalog(url):
+                    if not chapters:
+                        raise DownloadError("书籍目录没有找到可下载章节。")
+                    book_name, first_url = catalog[0], chapters[0]
+                elif catalog and url in chapters:
+                    book_name, first_url = catalog[0], url
+                else:
+                    book_name, first_url = adapter.prepare(url)
                 stem = safe_filename(adapter.name_prefix + book_name) + "_" + key[:10]
                 output_name = stem + ".txt"
                 index = 2
@@ -439,7 +468,8 @@ class NovelDownloader:
                 store.initialize(url, book_name, adapter.source_name, first_url, output_name)
                 current_url = first_url
                 ready = True
-            self.on_progress(DownloadProgress(book_name, "准备下载", saved_count))
+
+            self.on_progress(DownloadProgress(book_name, "准备下载", saved_count, total_count))
             while current_url:
                 self._check_stop()
                 normalized = normalize_url(current_url)
@@ -453,7 +483,15 @@ class NovelDownloader:
                 content = self._clean_content(content)
                 if not content:
                     raise DownloadError("章节正文为空，本章未保存。")
-                next_url = adapter.find_next(soup, current_url)
+
+                if current_url in chapters:
+                    position = chapters.index(current_url)
+                    next_url = next(
+                        (candidate for candidate in chapters[position + 1:]
+                         if not store.contains(candidate)), None
+                    )
+                else:
+                    next_url = adapter.find_next(soup, current_url)
                 if next_url == current_url or (next_url and store.contains(next_url)):
                     raise DownloadError("下一章链接回到已下载章节，已停止并保留记录。")
                 title = self._format_title(raw_title, saved_count + 1)
@@ -461,12 +499,15 @@ class NovelDownloader:
                 store.save_chapter(current_url, title, content, next_url)
                 saved_count = store.count()
                 self.log(f"已保存：{title}")
-                self.on_progress(DownloadProgress(book_name, title, saved_count))
+                self.on_progress(DownloadProgress(book_name, title, saved_count, total_count))
                 current_url = next_url
                 if current_url:
                     self._wait(REQUEST_DELAY)
             status = "end_reached"
-            message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
+            if total_count is not None:
+                message = f"下载任务结束，已保存 {saved_count} 章，目录共 {total_count} 章。"
+            else:
+                message = f"未发现下一章，已保存 {saved_count} 章。请对照网站目录确认是否完整。"
         except (DownloadStopped, KeyboardInterrupt):
             status, message = "stopped", "已停止；使用相同网址和保存目录可继续。"
         except (DownloadError, StorageError, requests.RequestException, OSError, sqlite3.Error, ValueError) as error:
@@ -476,15 +517,25 @@ class NovelDownloader:
                 if store is not None and ready:
                     saved_count = store.count()
                     if saved_count:
-                        output_path = store.export(output_dir)
-            except (OSError, sqlite3.Error, StorageError) as error:
+                        if output_format in ("txt", "both"):
+                            output_path = store.export(output_dir)
+                            exports.append(output_path)
+                        if output_format in ("epub", "both"):
+                            from novel_epub import export_epub
+                            target_name = Path(store.task()["output_name"]).with_suffix(".epub")
+                            epub_path = export_epub(store, output_dir / target_name)
+                            exports.append(epub_path)
+                            if output_path is None:
+                                output_path = epub_path
+            except (OSError, sqlite3.Error, StorageError, ValueError) as error:
                 status = "failed"
-                message += f" TXT 导出失败：{error}。章节仍在下载记录中，重试可重新导出。"
+                message += f" 导出失败：{error}。章节仍在下载记录中，重试可重新导出。"
             finally:
                 if store is not None:
                     store.close()
                 self._cache.clear()
         self.log(message)
-        if output_path:
-            self.log(f"TXT 已保存到：{output_path}")
-        return DownloadResult(status, book_name, saved_count, output_path, message)
+        for path in exports:
+            self.log(f"已导出：{path}")
+        return DownloadResult(status, book_name, saved_count, output_path, message, tuple(exports))
+
