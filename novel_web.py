@@ -5,12 +5,22 @@ Only binds to loopback; this is intentionally not a public-facing web service.
 
 import html
 import secrets
+import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
 from novel_core import DEFAULT_OUTPUT_DIR, DownloadError, NovelDownloader, normalize_url
+
+ 
+def local_host_allowed(host, port):
+    """拒绝非回环 Host，防止本地 Web 服务遭 DNS 重绑定访问。"""
+    return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
+
+def local_origin_allowed(origin, port):
+    return origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
 
 
 class DownloadDashboard:
@@ -82,7 +92,8 @@ class DownloadDashboard:
         # No arbitrary file paths are accepted from the web request.
         return sorted(
             (path for path in self.output_dir.iterdir()
-             if path.is_file() and path.suffix.lower() in (".txt", ".epub")),
+             if path.is_file() and not path.is_symlink()
+             and path.suffix.lower() in (".txt", ".epub")),
             key=lambda path: path.stat().st_mtime, reverse=True,
         )
 
@@ -91,6 +102,18 @@ def serve(port=18423, output_dir=DEFAULT_OUTPUT_DIR):
     dashboard = DownloadDashboard(output_dir)
 
     class Handler(BaseHTTPRequestHandler):
+        def local_request(self, check_origin=False):
+            if not local_host_allowed(self.headers.get("Host", ""), server.server_port):
+                self.send_error(403, "Only localhost is allowed")
+                return False
+            origin = self.headers.get("Origin")
+            if check_origin and origin and not local_origin_allowed(
+                origin, server.server_port
+            ):
+                self.send_error(403, "Origin is not allowed")
+                return False
+            return True
+
         def reply(self, status, text, content_type="text/html; charset=utf-8"):
             data = text.encode("utf-8")
             self.send_response(status)
@@ -98,10 +121,13 @@ def serve(port=18423, output_dir=DEFAULT_OUTPUT_DIR):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
+            if not self.local_request():
+                return
             target = urlsplit(self.path)
             if target.path == "/":
                 self.reply(200, self.page())
@@ -113,34 +139,43 @@ def serve(port=18423, output_dir=DEFAULT_OUTPUT_DIR):
                     self.send_error(400, "Invalid file name")
                     return
                 path = dashboard.output_dir / name
-                if (not path.is_file() or
-                        path.suffix.lower() not in (".txt", ".epub")):
+                if (not path.is_file() or path.is_symlink()
+                        or path.resolve().parent != dashboard.output_dir
+                        or path.suffix.lower() not in (".txt", ".epub")):
                     self.send_error(404, "File not found")
                     return
-                data = path.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header(
-                    "Content-Disposition", "attachment; filename*=UTF-8''" + quote(name)
-                )
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                # 边读边发送，避免将整部小说加载进 Web 服务器内存。
+                with path.open("rb") as source:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header(
+                        "Content-Disposition", "attachment; filename*=UTF-8''" + quote(name)
+                    )
+                    self.send_header("Content-Length", str(path.stat().st_size))
+                    self.end_headers()
+                    shutil.copyfileobj(source, self.wfile, length=65536)
                 return
             self.send_error(404)
 
         def do_POST(self):
+            if not self.local_request(check_origin=True):
+                return
             if self.path not in ("/start", "/stop"):
                 self.send_error(404)
                 return
             # A random form token prevents unrelated pages from starting work.
-            length = int(self.headers.get("Content-Length", "0"))
-            if length > 8192 or length < 1:
-                self.send_error(413)
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 1 <= length <= 8192:
+                    raise ValueError
+                if self.headers.get("Content-Type", "").split(";")[0] != "application/x-www-form-urlencoded":
+                    raise ValueError
+                data = parse_qs(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                self.send_error(400, "Invalid form data")
                 return
-            data = parse_qs(self.rfile.read(length).decode("utf-8"))
-            if data.get("token", [None])[0] != dashboard.token:
+            if not secrets.compare_digest(data.get("token", [""])[0], dashboard.token):
                 self.send_error(403)
                 return
             try:
