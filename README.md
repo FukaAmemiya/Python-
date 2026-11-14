@@ -6,6 +6,17 @@
 
 **Windows 用户可以直接下载独立 EXE，完全不需要安装 Python。** 只有需要修改源代码、调试或使用命令行的用户才需要下面的 Python 环境。
 
+## Code signing policy / 代码签名政策
+
+**Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).**
+
+我们计划采用 SignPath Foundation 的免费开源软件签名服务。**目前 v1.1.0 仍是未签名版本，免费签名申请尚未获批。** 未来正式签名版必须通过 GitHub 构建来源校验、维护者人工批准、Windows 签名与时间戳验证才能发布。
+
+- [Code signing policy / 完整签名政策、维护人员角色与申请说明](CODE_SIGNING.md)
+- [Privacy policy / 隐私政策](PRIVACY.md)
+- 代码提交者 / 审查者：仓库所有者 [FukaAmemiya](https://github.com/FukaAmemiya) 与正式授权的维护成员；签名审批责任由仓库维护者承担。
+- 已有版本与签名状态请以 [Releases](https://github.com/FukaAmemiya/Python-/releases) 的实际文件和签名检查结果为准，不能仅凭 SHA-256 判断是否具有可信发布者签名。
+
 ## Windows 直接下载 EXE（推荐）
 
 前往 **[Releases 下载页](https://github.com/FukaAmemiya/Python-/releases)**，在最新版本的 Assets 中下载 `NovelDownloader-Windows-x64.exe`，双击即可打开窗口。目标平台为 Windows 10/11 的 64 位系统。
@@ -162,9 +173,9 @@ CLI 下载期间按 `Ctrl+C` 会尝试停止并导出；交互模式随后返回
 
 ## Windows EXE 的自动构建与发布
 
-`.github/workflows/windows-release.yml` 会在 Pull Request 和 `main` 推送时完成 Windows 回归测试、PyInstaller 打包与启动冒烟检查，并上传 **未签名预览产物**，但不会将其发布到 Releases。只有仓库维护者从 **Actions → Windows EXE build and signed Release → Run workflow** 在 `main` 分支手动输入全新版本号（如 `v1.1.1`），才会尝试通过 **Azure Artifact Signing + GitHub OIDC** 签署 EXE。签名、可信时间戳、Windows 验证全部通过后，才计算签名后的 SHA-256 并发布正式 Release。
+`.github/workflows/windows-release.yml` 在 Pull Request 和 `main` 推送时运行 Windows 回归测试、PyInstaller 打包和启动冒烟检查，上传**未签名预览产物**，但不自动发布。SignPath Foundation 审核通过并完成配置后，维护者可在 **Actions → Windows EXE build and SignPath Release → Run workflow** 从 `main` 分支输入未用过的新版本号（如 `v1.1.1`），提交 GitHub 来源验证的构建产物，等待 SignPath 的逐版本人工审批，最后核验签名和时间戳并发布。
 
-**尚未配置受信任签名身份时，签名发布步骤会失败，不会退回发布未签名 EXE。** 证书获取、Azure 设置与其他开源免费方案请参阅 [CODE_SIGNING.md：代码签名政策](CODE_SIGNING.md)。
+**尚未获批或未配置受信任签名身份时，新签名 Release 无法发布，也不会退回发布未签名 EXE。** 详细流程见 [CODE_SIGNING.md](CODE_SIGNING.md)。
 
 ## 主要文件
 
